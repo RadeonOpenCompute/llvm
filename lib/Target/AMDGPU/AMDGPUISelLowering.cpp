@@ -2421,6 +2421,42 @@ SDValue AMDGPUTargetLowering::performMulhuCombine(SDNode *N,
   return DAG.getZExtOrTrunc(Mulhi, DL, VT);
 }
 
+static SDValue reduce24BitOperand(SDValue Op, SelectionDAG &DAG) {
+
+  if (Op.getOpcode() == ISD::AND &&
+      dyn_cast<ConstantSDNode>(Op.getOperand(1))->getAPIntValue()
+      .countLeadingZeros() == 8)
+    return Op.getOperand(0);
+
+  return Op;
+}
+
+bool AMDGPUTargetLowering::performMul24Combine(SDNode *N,
+                                               DAGCombinerInfo &DCI) const {
+  SelectionDAG &DAG = DCI.DAG;
+
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+
+  bool Simplified = simplifyI24(N0, DCI);
+  Simplified |= simplifyI24(N1, DCI);
+
+  if (Simplified)
+    return true;
+
+  // simplifyI24 only works if N0 or N1 has one use, so we need to handle
+  // the multiple use case here.
+
+  SDValue ReducedN0 = reduce24BitOperand(N0, DAG);
+  SDValue ReducedN1 = reduce24BitOperand(N1, DAG);
+
+  if (ReducedN0 == N0 && ReducedN1 == N1)
+    return false;
+
+  DAG.UpdateNodeOperands(N, ReducedN0, ReducedN1);
+  return true;
+}
+
 SDValue AMDGPUTargetLowering::performMulLoHi24Combine(
   SDNode *N, DAGCombinerInfo &DCI) const {
   SelectionDAG &DAG = DCI.DAG;
@@ -2429,7 +2465,7 @@ SDValue AMDGPUTargetLowering::performMulLoHi24Combine(
   SDValue N1 = N->getOperand(1);
 
   // Simplify demanded bits before splitting into multiple users.
-  if (simplifyI24(N0, DCI) || simplifyI24(N1, DCI))
+  if (performMul24Combine(N, DCI))
     return SDValue();
 
   bool Signed = (N->getOpcode() == AMDGPUISD::MUL_LOHI_I24);
@@ -2633,10 +2669,7 @@ SDValue AMDGPUTargetLowering::PerformDAGCombine(SDNode *N,
   case AMDGPUISD::MUL_U24:
   case AMDGPUISD::MULHI_I24:
   case AMDGPUISD::MULHI_U24: {
-    SDValue N0 = N->getOperand(0);
-    SDValue N1 = N->getOperand(1);
-    simplifyI24(N0, DCI);
-    simplifyI24(N1, DCI);
+    performMul24Combine(N, DCI);
     return SDValue();
   }
   case AMDGPUISD::MUL_LOHI_I24:
