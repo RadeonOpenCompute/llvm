@@ -152,8 +152,10 @@ canMoveInstsAcrossMemOp(MachineInstr &MemOp,
   for (MachineInstr *InstToMove : InstsToMove) {
     if (!InstToMove->mayLoadOrStore())
       continue;
-    if (!TII->areMemAccessesTriviallyDisjoint(MemOp, *InstToMove, AA))
-      return false;
+    if (!TII->areMemAccessesTriviallyDisjoint(MemOp, *InstToMove, AA)) {
+      if (MemOp.mayStore() || InstToMove->mayStore())
+        return false;
+    }
   }
   return true;
 }
@@ -212,12 +214,19 @@ SILoadStoreOptimizer::findMatchingDSInst(MachineBasicBlock::iterator I,
         return E;
 
       if (MBBI->mayLoadOrStore() &&
-          !TII->areMemAccessesTriviallyDisjoint(*I, *MBBI, AA)) {
-        // We fail condition #1, but we may still be able to satisfy condition
-        // #2.  Add this instruction to the move list and then we will check
-        // if condition #2 holds once we have selected the matching instruction.
-        InstsToMove.push_back(&*MBBI);
-        addDefsToList(*MBBI, DefsToMove);
+        !TII->areMemAccessesTriviallyDisjoint(*I, *MBBI, AA)) {
+        /*
+           RAW or WAR - cannot reorder
+           WAW - cannot reorder
+           RAR - safe to reorder
+        */ 
+        if (MBBI->mayStore() || I->mayStore()) {
+          // We fail condition #1, but we may still be able to satisfy condition
+          // #2.  Add this instruction to the move list and then we will check
+          // if condition #2 holds once we have selected the matching instruction.
+          InstsToMove.push_back(&*MBBI);
+          addDefsToList(*MBBI, DefsToMove);
+        }
         continue;
       }
 
@@ -269,7 +278,9 @@ SILoadStoreOptimizer::findMatchingDSInst(MachineBasicBlock::iterator I,
     // it was safe to move I and also all the instruction in InstsToMove
     // down past this instruction.
     // FIXME: This is too conservative.
-    break;
+    if (!TII->areMemAccessesTriviallyDisjoint(*I, *MBBI, AA) &&
+     (I->mayStore() || MBBI->mayStore()))
+      break;
   }
   return E;
 }
