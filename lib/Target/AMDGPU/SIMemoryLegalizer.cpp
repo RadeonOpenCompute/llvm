@@ -14,11 +14,14 @@
 
 #include "AMDGPU.h"
 #include "AMDGPUSubtarget.h"
+#include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/IR/DiagnosticInfo.h"
+
 using namespace llvm;
+using namespace llvm::AMDGPU;
 
 #define DEBUG_TYPE "si-memory-legalizer"
 #define PASS_NAME "SI Memory Legalizer"
@@ -27,9 +30,10 @@ namespace {
 
 class SIMemoryLegalizer final : public MachineFunctionPass {
 private:
-  /// \brief Immediate for "vmcnt(0)".
-  static const unsigned Vmcnt0;
-
+  /// \brief Subtarget.
+  const SISubtarget *ST;
+  /// \brief Isa version.
+  IsaVersion IV;
   /// \brief Target instruction info.
   const SIInstrInfo *TII;
   /// \brief LLVM context.
@@ -88,7 +92,7 @@ public:
   static char ID;
 
   SIMemoryLegalizer()
-      : MachineFunctionPass(ID), TII(nullptr), CTX(nullptr) {}
+      : MachineFunctionPass(ID), ST(nullptr), TII(nullptr), CTX(nullptr) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
@@ -106,7 +110,6 @@ public:
 
 INITIALIZE_PASS(SIMemoryLegalizer, DEBUG_TYPE, PASS_NAME, false, false)
 
-const unsigned SIMemoryLegalizer::Vmcnt0 = 0x7 << 4 | 0xF << 8;
 char SIMemoryLegalizer::ID = 0;
 char &llvm::SIMemoryLegalizerID = SIMemoryLegalizer::ID;
 
@@ -128,6 +131,8 @@ bool SIMemoryLegalizer::insertWaitcntVmcnt0(
   MachineBasicBlock &MBB = *MI->getParent();
   DebugLoc DL = MI->getDebugLoc();
 
+  unsigned Vmcnt0 =
+      AMDGPU::encodeWaitcnt(IV, 0, getExpcntBitMask(IV), getLgkmcntBitMask(IV));
   BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(Vmcnt0);
   return true;
 }
@@ -431,7 +436,9 @@ bool SIMemoryLegalizer::expandAtomicRmw(MachineBasicBlock::iterator &MI) {
 bool SIMemoryLegalizer::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
 
-  TII = MF.getSubtarget<SISubtarget>().getInstrInfo();
+  ST = &MF.getSubtarget<SISubtarget>();
+  IV = getIsaVersion(ST->getFeatureBits());
+  TII = ST->getInstrInfo();
   CTX = &MF.getFunction()->getContext();
 
   for (auto &MBB : MF) {
