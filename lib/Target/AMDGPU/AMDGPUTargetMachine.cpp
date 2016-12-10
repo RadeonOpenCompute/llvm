@@ -90,6 +90,7 @@ extern "C" void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUOCL12AdapterPass(*PR);
   initializeAMDGPUPrintfRuntimeBindingPass(*PR);
   initializeAMDGPUclpVectorExpansionPass(*PR);
+  initializeAMDGPULowerKernelCallsPass(*PR);
 }
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
@@ -188,6 +189,7 @@ StringRef AMDGPUTargetMachine::getFeatureString(const Function &F) const {
 }
 
 void AMDGPUTargetMachine::addPreLinkPasses(PassManagerBase & PM) {
+  PM.add(llvm::createAMDGPULowerKernelCallsPass());
   PM.add(llvm::createAMDGPUConvertAtomicLibCallsPass());
   PM.add(llvm::createAMDGPUOCL12AdapterPass());
   PM.add(llvm::createAMDGPUPrintfRuntimeBinding());
