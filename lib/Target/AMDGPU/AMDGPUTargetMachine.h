@@ -59,6 +59,8 @@ public:
   }
   void addPreLinkPasses(PassManagerBase & PM) override;
   void addEarlyAsPossiblePasses(PassManagerBase &PM) override;
+
+  void addPreLinkPasses(PassManagerBase & PM) override;
 };
 
 //===----------------------------------------------------------------------===//

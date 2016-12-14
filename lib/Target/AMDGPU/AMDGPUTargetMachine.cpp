@@ -215,6 +215,13 @@ void AMDGPUTargetMachine::addEarlyAsPossiblePasses(PassManagerBase &PM) {
   PM.add(createAMDGPUUnifyMetadataPass());
 }
 
+void AMDGPUTargetMachine::addPreLinkPasses(PassManagerBase & PM) {
+  PM.add(llvm::createAMDGPUConvertAtomicLibCallsPass());
+  PM.add(llvm::createAMDGPUOCL12AdapterPass());
+  PM.add(llvm::createAMDGPUPrintfRuntimeBinding());
+  PM.add(llvm::createAMDGPUclpVectorExpansionPass());
+}
+
 //===----------------------------------------------------------------------===//
 // R600 Target Machine (R600 -> Cayman)
 //===----------------------------------------------------------------------===//
