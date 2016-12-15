@@ -206,7 +206,6 @@ StringRef AMDGPUTargetMachine::getFeatureString(const Function &F) const {
 }
 
 void AMDGPUTargetMachine::addPreLinkPasses(PassManagerBase & PM) {
-  PM.add(llvm::createAMDGPULowerKernelCallsPass());
   PM.add(llvm::createAMDGPUConvertAtomicLibCallsPass());
   PM.add(llvm::createAMDGPUOCL12AdapterPass());
   PM.add(llvm::createAMDGPUPrintfRuntimeBinding());
@@ -424,6 +423,9 @@ void AMDGPUPassConfig::addIRPasses() {
   disablePass(&StackMapLivenessID);
   disablePass(&FuncletLayoutID);
   disablePass(&PatchableFunctionID);
+
+  // this pass should be performed on linked module
+  addPass(createAMDGPULowerKernelCallsPass());
 
   // Function calls are not supported, so make sure we inline everything.
   addPass(createAMDGPUAlwaysInlinePass());
