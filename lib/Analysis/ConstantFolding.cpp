@@ -734,14 +734,15 @@ Constant *CastGEPIndices(Type *SrcElemTy, ArrayRef<Constant *> Ops,
                          Type *ResultTy, Optional<unsigned> InRangeIndex,
                          const DataLayout &DL, const TargetLibraryInfo *TLI) {
   Type *IntPtrTy = DL.getIntPtrType(ResultTy);
+  Type *IntPtrScalarTy = IntPtrTy->getScalarType();
 
   bool Any = false;
   SmallVector<Constant*, 32> NewIdxs;
   for (unsigned i = 1, e = Ops.size(); i != e; ++i) {
     if ((i == 1 ||
-         !isa<StructType>(GetElementPtrInst::getIndexedType(SrcElemTy,
-             Ops.slice(1, i - 1)))) &&
-        Ops[i]->getType() != IntPtrTy) {
+         !isa<StructType>(GetElementPtrInst::getIndexedType(
+             SrcElemTy, Ops.slice(1, i - 1)))) &&
+        Ops[i]->getType() != (i == 1 ? IntPtrTy : IntPtrScalarTy)) {
       Any = true;
       NewIdxs.push_back(ConstantExpr::getCast(CastInst::getCastOpcode(Ops[i],
                                                                       true,
@@ -1441,7 +1442,7 @@ Constant *GetConstantFoldFPValue(double V, Type *Ty) {
   if (Ty->isHalfTy()) {
     APFloat APF(V);
     bool unused;
-    APF.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven, &unused);
+    APF.convert(APFloat::IEEEhalf(), APFloat::rmNearestTiesToEven, &unused);
     return ConstantFP::get(Ty->getContext(), APF);
   }
   if (Ty->isFloatTy())
@@ -1532,7 +1533,7 @@ double getValueAsDouble(ConstantFP *Op) {
 
   bool unused;
   APFloat APF = Op->getValueAPF();
-  APF.convert(APFloat::IEEEdouble, APFloat::rmNearestTiesToEven, &unused);
+  APF.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven, &unused);
   return APF.convertToDouble();
 }
 
@@ -1550,7 +1551,7 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
         APFloat Val(Op->getValueAPF());
 
         bool lost = false;
-        Val.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven, &lost);
+        Val.convert(APFloat::IEEEhalf(), APFloat::rmNearestTiesToEven, &lost);
 
         return ConstantInt::get(Ty->getContext(), Val.bitcastToAPInt());
       }
@@ -1725,7 +1726,7 @@ Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID, Type *Ty,
       case Intrinsic::bitreverse:
         return ConstantInt::get(Ty->getContext(), Op->getValue().reverseBits());
       case Intrinsic::convert_from_fp16: {
-        APFloat Val(APFloat::IEEEhalf, Op->getValue());
+        APFloat Val(APFloat::IEEEhalf(), Op->getValue());
 
         bool lost = false;
         APFloat::opStatus status = Val.convert(

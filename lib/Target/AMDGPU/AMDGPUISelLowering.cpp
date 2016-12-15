@@ -435,6 +435,10 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SELECT, MVT::v4f32, Promote);
   AddPromotedToType(ISD::SELECT, MVT::v4f32, MVT::v4i32);
 
+  // There are no libcalls of any kind.
+  for (int I = 0; I < RTLIB::UNKNOWN_LIBCALL; ++I)
+    setLibcallName(static_cast<RTLIB::Libcall>(I), nullptr);
+
   setBooleanContents(ZeroOrNegativeOneBooleanContent);
   setBooleanVectorContents(ZeroOrNegativeOneBooleanContent);
 
@@ -1610,7 +1614,7 @@ SDValue AMDGPUTargetLowering::LowerFRINT(SDValue Op, SelectionDAG &DAG) const {
 
   assert(Op.getValueType() == MVT::f64);
 
-  APFloat C1Val(APFloat::IEEEdouble, "0x1.0p+52");
+  APFloat C1Val(APFloat::IEEEdouble(), "0x1.0p+52");
   SDValue C1 = DAG.getConstantFP(C1Val, SL, MVT::f64);
   SDValue CopySign = DAG.getNode(ISD::FCOPYSIGN, SL, MVT::f64, C1, Src);
 
@@ -1621,7 +1625,7 @@ SDValue AMDGPUTargetLowering::LowerFRINT(SDValue Op, SelectionDAG &DAG) const {
 
   SDValue Fabs = DAG.getNode(ISD::FABS, SL, MVT::f64, Src);
 
-  APFloat C2Val(APFloat::IEEEdouble, "0x1.fffffffffffffp+51");
+  APFloat C2Val(APFloat::IEEEdouble(), "0x1.fffffffffffffp+51");
   SDValue C2 = DAG.getConstantFP(C2Val, SL, MVT::f64);
 
   EVT SetCCVT =
