@@ -67,12 +67,6 @@ def X86hsub    : SDNode<"X86ISD::HSUB",      SDTIntBinOp>;
 def X86comi    : SDNode<"X86ISD::COMI",      SDTX86CmpTest>;
 def X86ucomi   : SDNode<"X86ISD::UCOMI",     SDTX86CmpTest>;
 def X86cmps    : SDNode<"X86ISD::FSETCC",     SDTX86Cmps>;
-def X86cvtdq2pd: SDNode<"X86ISD::CVTDQ2PD",
-                 SDTypeProfile<1, 1, [SDTCisVT<0, v2f64>,
-                                      SDTCisVT<1, v4i32>]>>;
-def X86cvtudq2pd: SDNode<"X86ISD::CVTUDQ2PD",
-                 SDTypeProfile<1, 1, [SDTCisVT<0, v2f64>,
-                                      SDTCisVT<1, v4i32>]>>;
 def X86pshufb  : SDNode<"X86ISD::PSHUFB",
                  SDTypeProfile<1, 2, [SDTCVecEltisVT<0, i8>, SDTCisSameAs<0,1>,
                                       SDTCisSameAs<0,2>]>>;
@@ -507,12 +501,14 @@ def SDTintToFPRound: SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisFP<0>,
 
 def SDTFloatToInt: SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>,
                                         SDTCisInt<0>, SDTCisFP<1>]>;
-
 def SDTFloatToIntRnd: SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>,
                                            SDTCisInt<0>, SDTCisFP<1>,
                                            SDTCisVT<2, i32>]>;
 def SDTSFloatToIntRnd: SDTypeProfile<1, 2, [SDTCisInt<0>, SDTCisFP<1>,
                                             SDTCisVec<1>, SDTCisVT<2, i32>]>;
+
+def SDTVintToFP: SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>,
+                                      SDTCisFP<0>, SDTCisInt<1>]>;
 def SDTVintToFPRound: SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>,
                                            SDTCisFP<0>, SDTCisInt<1>,
                                            SDTCisVT<2, i32>]>;
@@ -541,6 +537,15 @@ def X86cvtp2IntRnd      : SDNode<"X86ISD::CVTP2SI_RND",  SDTFloatToIntRnd>;
 def X86cvtp2UIntRnd     : SDNode<"X86ISD::CVTP2UI_RND",  SDTFloatToIntRnd>;
 
 // Vector without rounding mode
+
+// cvtt fp-to-int staff
+def X86cvttp2si      : SDNode<"X86ISD::CVTTP2SI",  SDTFloatToInt>;
+def X86cvttp2ui      : SDNode<"X86ISD::CVTTP2UI",  SDTFloatToInt>;
+
+def X86VSintToFP      : SDNode<"X86ISD::CVTSI2P",  SDTVintToFP>;
+def X86VUintToFP      : SDNode<"X86ISD::CVTUI2P",  SDTVintToFP>;
+
+// cvt int-to-fp staff
 def X86cvtp2Int      : SDNode<"X86ISD::CVTP2SI",  SDTFloatToInt>;
 def X86cvtp2UInt     : SDNode<"X86ISD::CVTP2UI",  SDTFloatToInt>;
 
@@ -618,15 +623,6 @@ def loadv8i64    : PatFrag<(ops node:$ptr), (v8i64 (load node:$ptr))>;
 def extloadv2f32 : PatFrag<(ops node:$ptr), (v2f64 (extloadvf32 node:$ptr))>;
 def extloadv4f32 : PatFrag<(ops node:$ptr), (v4f64 (extloadvf32 node:$ptr))>;
 def extloadv8f32 : PatFrag<(ops node:$ptr), (v8f64 (extloadvf32 node:$ptr))>;
-
-// These are needed to match a scalar load that is used in a vector-only
-// math instruction such as the FP logical ops: andps, andnps, orps, xorps.
-// The memory operand is required to be a 128-bit load, so it must be converted
-// from a vector to a scalar.
-def loadf32_128 : PatFrag<(ops node:$ptr),
-  (f32 (extractelt (loadv4f32 node:$ptr), (iPTR 0)))>;
-def loadf64_128 : PatFrag<(ops node:$ptr),
-  (f64 (extractelt (loadv2f64 node:$ptr), (iPTR 0)))>;
 
 // Like 'store', but always requires 128-bit vector alignment.
 def alignedstore : PatFrag<(ops node:$val, node:$ptr),
@@ -852,6 +848,10 @@ def fp32imm0 : PatLeaf<(f32 fpimm), [{
   return N->isExactlyValue(+0.0);
 }]>;
 
+def fp64imm0 : PatLeaf<(f64 fpimm), [{
+  return N->isExactlyValue(+0.0);
+}]>;
+
 def I8Imm : SDNodeXForm<imm, [{
   // Transformation function: get the low 8 bits.
   return getI8Imm((uint8_t)N->getZExtValue(), SDLoc(N));
@@ -962,28 +962,23 @@ def X86mstore : PatFrag<(ops node:$src1, node:$src2, node:$src3),
 
 def masked_store_aligned128 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
                          (X86mstore node:$src1, node:$src2, node:$src3), [{
-  if (auto *Store = dyn_cast<MaskedStoreSDNode>(N))
-    return Store->getAlignment() >= 16;
-  return false;
+  return cast<MaskedStoreSDNode>(N)->getAlignment() >= 16;
 }]>;
 
 def masked_store_aligned256 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
                          (X86mstore node:$src1, node:$src2, node:$src3), [{
-  if (auto *Store = dyn_cast<MaskedStoreSDNode>(N))
-    return Store->getAlignment() >= 32;
-  return false;
+  return cast<MaskedStoreSDNode>(N)->getAlignment() >= 32;
 }]>;
 
 def masked_store_aligned512 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
                          (X86mstore node:$src1, node:$src2, node:$src3), [{
-  if (auto *Store = dyn_cast<MaskedStoreSDNode>(N))
-    return Store->getAlignment() >= 64;
-  return false;
+  return cast<MaskedStoreSDNode>(N)->getAlignment() >= 64;
 }]>;
 
 def masked_store_unaligned : PatFrag<(ops node:$src1, node:$src2, node:$src3),
-                         (X86mstore node:$src1, node:$src2, node:$src3), [{
-  return isa<MaskedStoreSDNode>(N);
+                         (masked_store node:$src1, node:$src2, node:$src3), [{
+  return (!cast<MaskedStoreSDNode>(N)->isTruncatingStore()) &&
+         (!cast<MaskedStoreSDNode>(N)->isCompressingStore());
 }]>;
 
 def X86mCompressingStore : PatFrag<(ops node:$src1, node:$src2, node:$src3),

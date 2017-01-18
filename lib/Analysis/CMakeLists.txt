@@ -83,6 +83,9 @@ add_llvm_library(LLVMAnalysis
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis
+
+  DEPENDS
+  intrinsics_gen
   )
 
 add_dependencies(LLVMAnalysis intrinsics_gen)

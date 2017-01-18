@@ -18,23 +18,30 @@
 #ifndef LLVM_IR_GLOBALVALUE_H
 #define LLVM_IR_GLOBALVALUE_H
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/MD5.h"
-#include <system_error>
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include <cassert>
+#include <cstdint>
+#include <string>
 
 namespace llvm {
 
 class Comdat;
-class PointerType;
+class Error;
+class GlobalObject;
 class Module;
 
 namespace Intrinsic {
   enum ID : unsigned;
-}
+} // end namespace Intrinsic
 
 class GlobalValue : public Constant {
-  GlobalValue(const GlobalValue &) = delete;
 public:
   /// @brief An enumeration for the kinds of linkage for global values.
   enum LinkageTypes {
@@ -89,11 +96,12 @@ protected:
   static const unsigned GlobalValueSubClassDataBits = 19;
 
 private:
+  friend class Constant;
+
   // Give subclasses access to what otherwise would be wasted padding.
   // (19 + 4 + 2 + 2 + 2 + 3) == 32.
   unsigned SubClassData : GlobalValueSubClassDataBits;
 
-  friend class Constant;
   void destroyConstantImpl();
   Value *handleOperandChangeImpl(Value *From, Value *To);
 
@@ -139,6 +147,12 @@ protected:
   }
 
   Module *Parent;             // The containing module.
+
+  // Used by SymbolTableListTraits.
+  void setParent(Module *parent) {
+    Parent = parent;
+  }
+
 public:
   enum ThreadLocalMode {
     NotThreadLocal = 0,
@@ -147,6 +161,8 @@ public:
     InitialExecTLSModel,
     LocalExecTLSModel
   };
+
+  GlobalValue(const GlobalValue &) = delete;
 
   ~GlobalValue() override {
     removeDeadConstantUsers();   // remove any dead constants using this.
@@ -460,10 +476,8 @@ public:
   /// function has been read in yet or not.
   bool isMaterializable() const;
 
-  /// Make sure this GlobalValue is fully read. If the module is corrupt, this
-  /// returns true and fills in the optional string with information about the
-  /// problem.  If successful, this returns false.
-  std::error_code materialize();
+  /// Make sure this GlobalValue is fully read.
+  Error materialize();
 
 /// @}
 
@@ -492,6 +506,11 @@ public:
   // increased.
   bool canIncreaseAlignment() const;
 
+  const GlobalObject *getBaseObject() const {
+    return const_cast<GlobalValue *>(this)->getBaseObject();
+  }
+  GlobalObject *getBaseObject();
+
   /// This method unlinks 'this' from the containing module, but does not delete
   /// it.
   virtual void removeFromParent() = 0;
@@ -512,6 +531,6 @@ public:
   }
 };
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_IR_GLOBALVALUE_H

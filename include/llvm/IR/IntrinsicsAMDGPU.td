@@ -107,6 +107,9 @@ def int_amdgcn_dispatch_id :
 def int_amdgcn_s_barrier : GCCBuiltin<"__builtin_amdgcn_s_barrier">,
   Intrinsic<[], [], [IntrConvergent]>;
 
+def int_amdgcn_wave_barrier : GCCBuiltin<"__builtin_amdgcn_wave_barrier">,
+  Intrinsic<[], [], [IntrConvergent]>;
+
 def int_amdgcn_s_waitcnt : Intrinsic<[], [llvm_i32_ty], []>;
 
 def int_amdgcn_div_scale : Intrinsic<
@@ -178,7 +181,7 @@ def int_amdgcn_frexp_mant : Intrinsic<
 >;
 
 def int_amdgcn_frexp_exp : Intrinsic<
-  [llvm_i32_ty], [llvm_anyfloat_ty], [IntrNoMem]
+  [llvm_anyint_ty], [llvm_anyfloat_ty], [IntrNoMem]
 >;
 
 // v_fract is buggy on SI/CI. It mishandles infinities, may return 1.0
@@ -472,11 +475,19 @@ def int_amdgcn_s_getreg :
   GCCBuiltin<"__builtin_amdgcn_s_getreg">,
   Intrinsic<[llvm_i32_ty], [llvm_i32_ty], [IntrReadMem]>;
 
+// __builtin_amdgcn_interp_mov <param>, <attr_chan>, <attr>, <m0>
+// param values: 0 = P10, 1 = P20, 2 = P0
+def int_amdgcn_interp_mov :
+  GCCBuiltin<"__builtin_amdgcn_interp_mov">,
+  Intrinsic<[llvm_float_ty],
+            [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+            [IntrNoMem]>;
+
 // __builtin_amdgcn_interp_p1 <i>, <attr_chan>, <attr>, <m0>
 def int_amdgcn_interp_p1 :
   GCCBuiltin<"__builtin_amdgcn_interp_p1">,
   Intrinsic<[llvm_float_ty],
-            [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+            [llvm_float_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
             [IntrNoMem]>;  // This intrinsic reads from lds, but the memory
                            // values are constant, so it behaves like IntrNoMem.
 
@@ -484,7 +495,7 @@ def int_amdgcn_interp_p1 :
 def int_amdgcn_interp_p2 :
   GCCBuiltin<"__builtin_amdgcn_interp_p2">,
   Intrinsic<[llvm_float_ty],
-            [llvm_float_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+            [llvm_float_ty, llvm_float_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
             [IntrNoMem]>;  // See int_amdgcn_v_interp_p1 for why this is
                            // IntrNoMem.
 

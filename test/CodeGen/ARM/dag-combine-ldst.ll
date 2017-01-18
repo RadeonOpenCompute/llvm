@@ -1,5 +1,5 @@
-; RUN: llc < %s -mtriple=arm-eabi -mattr=+v4t -O0 | FileCheck %s -check-prefix=CHECK_O0
-; RUN: llc < %s -mtriple=arm-eabi -mattr=+v4t -O1 | FileCheck %s -check-prefix=CHECK_O1
+; RUN: llc < %s -mtriple=arm-eabi -mattr=+v4t -O0 | FileCheck %s -check-prefix=CHECK -check-prefix=CHECK_O0
+; RUN: llc < %s -mtriple=arm-eabi -mattr=+v4t -O1 | FileCheck %s -check-prefix=CHECK -check-prefix=CHECK_O1
 
 ; In /O0, the addition must not be eliminated. This happens when the load
 ; and store are folded by the DAGCombiner. In /O1 and above, the optimization
