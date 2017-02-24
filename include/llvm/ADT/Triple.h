@@ -199,7 +199,8 @@ public:
     AMDOpenCL,
     CoreCLR,
     OpenCL,
-    LastEnvironmentType = OpenCL
+    HCC,
+    LastEnvironmentType = HCC
   };
   enum ObjectFormatType {
     UnknownObjectFormat,

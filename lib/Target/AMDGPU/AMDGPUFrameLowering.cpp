@@ -100,3 +100,4 @@ int AMDGPUFrameLowering::getFrameIndexReference(const MachineFunction &MF,
 
   return OffsetBytes / (getStackWidth(MF) * 4);
 }
+
