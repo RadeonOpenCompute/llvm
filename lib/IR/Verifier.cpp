@@ -592,8 +592,6 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
     // If the global has common linkage, it must have a zero initializer and
     // cannot be constant.
     if (GV.hasCommonLinkage()) {
-      Assert(GV.getInitializer()->isNullValue(),
-             "'common' global must have a zero initializer!", &GV);
       Assert(!GV.isConstant(), "'common' global may not be marked constant!",
              &GV);
       Assert(!GV.hasComdat(), "'common' global may not be in a Comdat!", &GV);
