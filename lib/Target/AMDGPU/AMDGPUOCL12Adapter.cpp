@@ -93,6 +93,7 @@ static bool locateFuncName(StringRef FuncName, size_t &FuncNameStart,
   // are "_Z" in the mangling scheme.
   size_t NumStartPos = 2;
   FuncNameStart = FuncName.find_first_not_of("0123456789", NumStartPos);
+  assert(FuncNameStart != NumStartPos);
   // Extract the integer, which is equal to the number of chars
   // in the function name.
   StringRef SizeInChar = FuncName.slice(NumStartPos, FuncNameStart);
@@ -208,18 +209,22 @@ static bool findAndDefineBuiltinCalls(Module &M) {
 
     // Search only for used, undefined OpenCL builtin functions,
     // which has non-default addr space pointer arguments.
-    if (!F.empty() || F.use_empty() || !F.getName().startswith("_Z") ||
-        !hasNonDefaultAddrSpaceArg(&F))
+    if (!F.empty() || F.use_empty() || !hasNonDefaultAddrSpaceArg(&F))
       continue;
-    if (F.getName().find("async_work_group", 0) == StringRef::npos &&
-        F.getName().find("prefetch", 0) == StringRef::npos) {
-      isModified = true;
-      Function *NewFunc = getNewOCL20BuiltinFuncDecl(&F);
-      // Get the new Function declaration.
-      DEBUG(dbgs() << "\n Modifying Func " << F.getName() << " to call "
-       << NewFunc->getName() << " Function");
-      createOCL20BuiltinFuncDefn(&F, NewFunc);
-    }
+
+    auto const Name = F.getName();
+    if (!Name.startswith("_Z") ||
+        Name.find_first_of("123456789", 2) != 2 ||
+        Name.find("async_work_group", 3) != StringRef::npos ||
+        Name.find("prefetch", 3) != StringRef::npos)
+      continue;
+
+    Function *NewFunc = getNewOCL20BuiltinFuncDecl(&F);
+    // Get the new Function declaration.
+    DEBUG(dbgs() << "\n Modifying Func " << Name << " to call "
+     << NewFunc->getName() << " Function");
+    createOCL20BuiltinFuncDefn(&F, NewFunc);
+    isModified = true;
   }
   return isModified;
 }
