@@ -380,7 +380,7 @@ struct StringFinder
   void WrapperType::FindUnderlyingPointerType(llvm::Type *Ty, llvm::Type *&T) {
     if(Ty->isPointerTy()) {
       mPointerCount++;
-      llvm::Type *nextTy = Ty->getSequentialElementType();
+      llvm::Type *nextTy = Ty->getPointerElementType();
       if(!mIsByVal) {
         FindUnderlyingPointerType(nextTy, T);
       }

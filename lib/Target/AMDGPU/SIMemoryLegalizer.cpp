@@ -44,12 +44,12 @@ private:
   /// \brief List of atomic pseudo machine instructions.
   std::list<MachineBasicBlock::iterator> AtomicPseudoMI;
 
-  /// \brief Inserts "buffer_wbinvl1_vol" instruction before \p MI. Always
-  /// returns true.
-  bool insertBufferWbinvl1Vol(const MachineBasicBlock::iterator &MI) const;
-  /// \brief Inserts "s_waitcnt vmcnt(0)" instruction before \p MI. Always
-  /// returns true.
-  bool insertWaitcntVmcnt0(const MachineBasicBlock::iterator &MI) const;
+  /// \brief Inserts "buffer_wbinvl1_vol" instruction before or after \p MI.
+  /// Always returns true.
+  bool insertBufferWbinvl1Vol(MachineBasicBlock::iterator &MI, bool Before) const;
+  /// \brief Inserts "s_waitcnt vmcnt(0)" instruction before or after \p MI.
+  /// Always returns true.
+  bool insertWaitcntVmcnt0(MachineBasicBlock::iterator &MI, bool Before) const;
 
   /// \brief Sets GLC bit if present in \p MI. Returns true if \p MI is
   /// modified, false otherwise.
@@ -122,20 +122,34 @@ FunctionPass *llvm::createSIMemoryLegalizerPass() {
 }
 
 bool SIMemoryLegalizer::insertBufferWbinvl1Vol(
-    const MachineBasicBlock::iterator &MI) const {
+    MachineBasicBlock::iterator &MI, bool Before = true) const {
   MachineBasicBlock &MBB = *MI->getParent();
   DebugLoc DL = MI->getDebugLoc();
 
-  BuildMI(MBB, MI, DL, TII->get(Wbinvl1Opcode));
+  if (Before)
+    BuildMI(MBB, MI, DL, TII->get(Wbinvl1Opcode));
+  else {
+    ++MI;
+    BuildMI(MBB, MI, DL, TII->get(Wbinvl1Opcode));
+    --MI;
+  }
+
   return true;
 }
 
 bool SIMemoryLegalizer::insertWaitcntVmcnt0(
-    const MachineBasicBlock::iterator &MI) const {
+    MachineBasicBlock::iterator &MI, bool Before = true) const {
   MachineBasicBlock &MBB = *MI->getParent();
   DebugLoc DL = MI->getDebugLoc();
 
-  BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(Vmcnt0Immediate);
+  if (Before)
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(Vmcnt0Immediate);
+  else {
+    ++MI;
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(Vmcnt0Immediate);
+    --MI;
+  }
+
   return true;
 }
 
@@ -229,7 +243,8 @@ bool SIMemoryLegalizer::expandAtomicFence(MachineBasicBlock::iterator &MI) {
   switch (SynchScope) {
   case AMDGPUSynchronizationScope::System:
   case AMDGPUSynchronizationScope::Agent: {
-    if (Ordering == AtomicOrdering::Release ||
+    if (Ordering == AtomicOrdering::Acquire ||
+        Ordering == AtomicOrdering::Release ||
         Ordering == AtomicOrdering::AcquireRelease ||
         Ordering == AtomicOrdering::SequentiallyConsistent)
       Changed |= insertWaitcntVmcnt0(MI);
@@ -279,10 +294,8 @@ bool SIMemoryLegalizer::expandAtomicLoad(MachineBasicBlock::iterator &MI) {
 
     if (Ordering == AtomicOrdering::Acquire ||
         Ordering == AtomicOrdering::SequentiallyConsistent) {
-      ++MI;
-      Changed |= insertWaitcntVmcnt0(MI);
-      Changed |= insertBufferWbinvl1Vol(MI);
-      --MI;
+      Changed |= insertWaitcntVmcnt0(MI, false);
+      Changed |= insertBufferWbinvl1Vol(MI, false);
     }
 
     break;
@@ -350,8 +363,6 @@ bool SIMemoryLegalizer::expandAtomicCmpxchg(MachineBasicBlock::iterator &MI) {
   switch (SynchScope) {
   case AMDGPUSynchronizationScope::System:
   case AMDGPUSynchronizationScope::Agent: {
-    Changed |= setGLC(MI);
-
     if (SuccessOrdering == AtomicOrdering::Release ||
         SuccessOrdering == AtomicOrdering::AcquireRelease ||
         SuccessOrdering == AtomicOrdering::SequentiallyConsistent ||
@@ -363,10 +374,8 @@ bool SIMemoryLegalizer::expandAtomicCmpxchg(MachineBasicBlock::iterator &MI) {
         SuccessOrdering == AtomicOrdering::SequentiallyConsistent ||
         FailureOrdering == AtomicOrdering::Acquire ||
         FailureOrdering == AtomicOrdering::SequentiallyConsistent) {
-      ++MI;
-      Changed |= insertWaitcntVmcnt0(MI);
-      Changed |= insertBufferWbinvl1Vol(MI);
-      --MI;
+      Changed |= insertWaitcntVmcnt0(MI, false);
+      Changed |= insertBufferWbinvl1Vol(MI, false);
     }
 
     break;
@@ -400,8 +409,6 @@ bool SIMemoryLegalizer::expandAtomicRmw(MachineBasicBlock::iterator &MI) {
   switch (SynchScope) {
   case AMDGPUSynchronizationScope::System:
   case AMDGPUSynchronizationScope::Agent: {
-    Changed |= setGLC(MI);
-
     if (Ordering == AtomicOrdering::Release ||
         Ordering == AtomicOrdering::AcquireRelease ||
         Ordering == AtomicOrdering::SequentiallyConsistent)
@@ -410,10 +417,8 @@ bool SIMemoryLegalizer::expandAtomicRmw(MachineBasicBlock::iterator &MI) {
     if (Ordering == AtomicOrdering::Acquire ||
         Ordering == AtomicOrdering::AcquireRelease ||
         Ordering == AtomicOrdering::SequentiallyConsistent) {
-      ++MI;
-      Changed |= insertWaitcntVmcnt0(MI);
-      Changed |= insertBufferWbinvl1Vol(MI);
-      --MI;
+      Changed |= insertWaitcntVmcnt0(MI, false);
+      Changed |= insertBufferWbinvl1Vol(MI, false);
     }
 
     break;
@@ -449,7 +454,7 @@ bool SIMemoryLegalizer::runOnMachineFunction(MachineFunction &MF) {
 
   // FIXME: M0 initialization should be done during ISel.
   const SIMachineFunctionInfo &MFI = *MF.getInfo<SIMachineFunctionInfo>();
-  if (MFI.HasFlatLocalCasts) {
+  if (MFI.hasFlatLocalCasts()) {
     MachineBasicBlock &MBB = *MF.begin();
     MachineInstr &MI = *MBB.begin();
     BuildMI(MBB, MI, DebugLoc(), TII->get(AMDGPU::S_MOV_B32), AMDGPU::M0)
