@@ -55,6 +55,9 @@ EnablePartialOverwriteTracking("enable-dse-partial-overwrite-tracking",
   cl::init(true), cl::Hidden,
   cl::desc("Enable partial-overwrite tracking in DSE"));
 
+static cl::opt<bool>
+EnableRemoveAddrSpaceCastedAlloca("enable-dse-casted-alloca",
+  cl::init(true), cl::desc("Enable removing addr space casted alloca"));
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -982,6 +985,46 @@ static bool eliminateNoopStore(Instruction *Inst, BasicBlock::iterator &BBI,
       return true;
     }
   }
+
+  // Remove a store to stack whose life ends immediately
+  if (!EnableRemoveAddrSpaceCastedAlloca)
+    return false;
+  if (auto *ASC = dyn_cast<AddrSpaceCastInst>(SI->getPointerOperand())) {
+    auto *A = dyn_cast<AllocaInst>(ASC->stripPointerCasts());
+    if (!A)
+      return false;
+    for (auto I = SI->getIterator(), E = SI->getParent()->end();
+        I != E; ++I) {
+      DEBUG(dbgs() << "check inst: " << *I << '\n');
+      if (auto *II = dyn_cast<IntrinsicInst>(I)) {
+        auto ID = II->getIntrinsicID();
+        if (ID == Intrinsic::lifetime_end) {
+          if (II->getOperand(1)->stripPointerCasts() == A) {
+            DEBUG(
+              dbgs() << "DSE: Remove useless store to the calloc'ed object:"
+                        "\n  DEAD: "
+                     << *Inst << "\n  OBJECT: " << *A << '\n');
+
+            deleteDeadInstruction(SI, &BBI, *MD, *TLI, IOL, InstrOrdering);
+            ++NumRedundantStores;
+            return true;
+          } else {
+            continue;
+          }
+        } else if (ID == Intrinsic::lifetime_start ||
+                   ID == Intrinsic::amdgcn_s_barrier ) {
+          continue;
+        }
+      }
+      if (auto *LD = dyn_cast<LoadInst>(I)) {
+        if (GetUnderlyingObject(LD->getPointerOperand(), DL) != A)
+          continue;
+      }
+      if (I->mayReadFromMemory() && !isa<FenceInst>(I))
+        return false;
+    }
+  }
+
   return false;
 }
 
@@ -1023,6 +1066,17 @@ static bool eliminateDeadStores(BasicBlock &BB, AliasAnalysis *AA,
     // Check to see if Inst writes to memory.  If not, continue.
     if (!hasMemoryWrite(Inst, *TLI))
       continue;
+
+#ifndef NDEBUG
+    if (auto *ST = dyn_cast<StoreInst>(Inst)) {
+      if (auto *ASC = dyn_cast<AddrSpaceCastInst>(ST->getPointerOperand())) {
+        DEBUG(dbgs() << "[eliminateDeadStores] "
+          << "store: " << *ST << '\n'
+          << "addrcast: " << *ASC << '\n'
+          << "orig: " << *ASC->getPointerOperand() << '\n');
+      }
+    }
+#endif
 
     // eliminateNoopStore will update in iterator, if necessary.
     if (eliminateNoopStore(Inst, BBI, AA, MD, DL, TLI, IOL, &InstrOrdering)) {
