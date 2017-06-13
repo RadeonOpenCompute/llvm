@@ -422,7 +422,7 @@ def FeatureVolcanicIslands : SubtargetFeatureGeneration<"VOLCANIC_ISLANDS",
    FeatureGCN3Encoding, FeatureCIInsts, Feature16BitInsts,
    FeatureSMemRealTime, FeatureVGPRIndexMode, FeatureMovrel,
    FeatureScalarStores, FeatureInv2PiInlineImm, FeatureSDWA,
-   FeatureApertureRegs, FeatureDPP
+   FeatureDPP
   ]
 >;
 
