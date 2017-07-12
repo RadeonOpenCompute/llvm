@@ -159,7 +159,8 @@ static AtomicOrdering MemoryOrderSpir2LLVM(Value *SpirMemOrd) {
     memory_order_acq_rel,
     memory_order_seq_cst
   };
-  unsigned MemOrd = dyn_cast<ConstantInt>(SpirMemOrd)->getZExtValue();
+  auto *MO = dyn_cast<ConstantInt>(SpirMemOrd);
+  unsigned MemOrd = MO ? MO->getZExtValue() : -1;
   switch (MemOrd) {
   case memory_order_relaxed:
     return AtomicOrdering::Monotonic;
@@ -185,7 +186,8 @@ MemoryScopeOpenCL2LLVM(Value *OpenclMemScope) {
     memory_scope_all_svm_devices,
     memory_scope_sub_group
   };
-  unsigned MemScope = dyn_cast<ConstantInt>(OpenclMemScope)->getZExtValue();
+  auto *MS = dyn_cast<ConstantInt>(OpenclMemScope);
+  unsigned MemScope = MS ? MS->getZExtValue() : -1;
   switch (MemScope) {
   case memory_scope_work_item:
     llvm_unreachable("memory_scope_work_item not Valid for atomic builtins");
