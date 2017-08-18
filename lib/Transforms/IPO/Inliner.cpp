@@ -350,7 +350,8 @@ static bool shouldInline(CallSite CS,
                  << ", Call: " << *CS.getInstruction() << "\n");
     ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "AlwaysInline", Call)
              << NV("Callee", Callee)
-             << " should always be inlined (cost=always)");
+             << " should always be inlined (cost=always)"
+             << setIsVerbose());
     return true;
   }
 
@@ -581,7 +582,8 @@ inlineCallsImpl(CallGraphSCC &SCC, CallGraph &CG,
         // Report the inline decision.
         ORE.emit(OptimizationRemark(DEBUG_TYPE, "Inlined", DLoc, Block)
                  << NV("Callee", Callee) << " inlined into "
-                 << NV("Caller", Caller));
+                 << NV("Caller", Caller)
+                 << setIsVerbose());
 
         // If inlining this function gave us any new call sites, throw them
         // onto our worklist to process.  They are useful inline candidates.

@@ -202,7 +202,8 @@ public:
     AMDOpenCL,
     CoreCLR,
     OpenCL,
-    LastEnvironmentType = OpenCL
+    HCC,
+    LastEnvironmentType = HCC
   };
   enum ObjectFormatType {
     UnknownObjectFormat,
@@ -646,7 +647,7 @@ public:
   }
 
   /// Tests wether the target supports comdat
-  bool supportsCOMDAT() const { return !isOSBinFormatMachO(); }
+  bool supportsCOMDAT() const { return !isOSBinFormatMachO() && (getArch() != Triple::amdgcn); }
 
   /// @}
   /// @name Mutators

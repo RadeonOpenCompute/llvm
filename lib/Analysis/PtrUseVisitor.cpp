@@ -31,5 +31,11 @@ bool detail::PtrUseVisitorBase::adjustOffsetForGEP(GetElementPtrInst &GEPI) {
   if (!IsOffsetKnown)
     return false;
 
-  return GEPI.accumulateConstantOffset(DL, Offset);
+  // GEP pointer operand may be address space casted from the original pointer
+  // therefore the expected offset size need to match the pointer operand.
+  unsigned SZ = Offset.getBitWidth();
+  Offset = Offset.zextOrTrunc(DL.getPointerTypeSizeInBits(GEPI.getType()));
+  bool Res = GEPI.accumulateConstantOffset(DL, Offset);
+  Offset = Offset.zextOrTrunc(SZ);
+  return Res;
 }

@@ -100,6 +100,10 @@ public:
     return -1;
   }
 
+  unsigned getPrivateAddressSpace() {
+    return -1;
+  }
+
   bool isLegalAddImmediate(int64_t imm) {
     return getTLI()->isLegalAddImmediate(imm);
   }

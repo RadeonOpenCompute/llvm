@@ -187,6 +187,10 @@ public:
     return -1;
   }
 
+  unsigned getPrivateAddressSpace() {
+    return -1;
+  }
+
   bool isLoweredToCall(const Function *F) {
     // FIXME: These should almost certainly not be handled here, and instead
     // handled with the help of TLI or the target itself. This was largely
