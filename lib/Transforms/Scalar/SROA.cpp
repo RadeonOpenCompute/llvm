@@ -671,6 +671,13 @@ private:
     return Base::visitBitCastInst(BC);
   }
 
+  void visitAddrSpaceCastInst(AddrSpaceCastInst &ASC) {
+    if (ASC.use_empty())
+      return markAsDead(ASC);
+
+    return Base::visitAddrSpaceCastInst(ASC);
+  }
+
   void visitGetElementPtrInst(GetElementPtrInst &GEPI) {
     if (GEPI.use_empty())
       return markAsDead(GEPI);
@@ -908,7 +915,7 @@ private:
         if (!GEP->hasAllZeroIndices())
           return GEP;
       } else if (!isa<BitCastInst>(I) && !isa<PHINode>(I) &&
-                 !isa<SelectInst>(I)) {
+                 !isa<SelectInst>(I) && !isa<AddrSpaceCastInst>(I)) {
         return I;
       }
 
@@ -1512,10 +1519,10 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
   do {
     // First fold any existing GEPs into the offset.
     while (GEPOperator *GEP = dyn_cast<GEPOperator>(Ptr)) {
-      APInt GEPOffset(Offset.getBitWidth(), 0);
+      APInt GEPOffset(DL.getPointerTypeSizeInBits(Ptr->getType()), 0);
       if (!GEP->accumulateConstantOffset(DL, GEPOffset))
         break;
-      Offset += GEPOffset;
+      Offset += GEPOffset.zextOrTrunc(Offset.getBitWidth());
       Ptr = GEP->getPointerOperand();
       if (!Visited.insert(Ptr).second)
         break;
@@ -1547,7 +1554,8 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
     }
 
     // Peel off a layer of the pointer and update the offset appropriately.
-    if (Operator::getOpcode(Ptr) == Instruction::BitCast) {
+    unsigned Opc = Operator::getOpcode(Ptr);
+    if (Opc == Instruction::BitCast || Opc == Instruction::AddrSpaceCast) {
       Ptr = cast<Operator>(Ptr)->getOperand(0);
     } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(Ptr)) {
       if (GA->isInterposable())
@@ -1561,7 +1569,7 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
 
   if (!OffsetPtr) {
     if (!Int8Ptr) {
-      Int8Ptr = IRB.CreateBitCast(
+      Int8Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(
           Ptr, IRB.getInt8PtrTy(PointerTy->getPointerAddressSpace()),
           NamePrefix + "sroa_raw_cast");
       Int8PtrOffset = Offset;
@@ -1576,8 +1584,10 @@ static Value *getAdjustedPtr(IRBuilderTy &IRB, const DataLayout &DL, Value *Ptr,
   Ptr = OffsetPtr;
 
   // On the off chance we were targeting i8*, guard the bitcast here.
-  if (Ptr->getType() != PointerTy)
-    Ptr = IRB.CreateBitCast(Ptr, PointerTy, NamePrefix + "sroa_cast");
+  if (Ptr->getType() != PointerTy) {
+    Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(Ptr, PointerTy,
+                                                  NamePrefix + "sroa_cast");
+  }
 
   return Ptr;
 }
@@ -3178,6 +3188,11 @@ private:
     return false;
   }
 
+  bool visitAddrSpaceCastInst(AddrSpaceCastInst &ASC) {
+    enqueueUsers(ASC);
+    return false;
+  }
+
   bool visitGetElementPtrInst(GetElementPtrInst &GEPI) {
     enqueueUsers(GEPI);
     return false;
@@ -3593,7 +3608,9 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
       auto *PartPtrTy = PartTy->getPointerTo(AS);
       LoadInst *PLoad = IRB.CreateAlignedLoad(
           getAdjustedPtr(IRB, DL, BasePtr,
-                         APInt(DL.getPointerSizeInBits(AS), PartOffset),
+                         APInt(DL.getPointerSizeInBits(
+                               LI->getPointerAddressSpace()),
+                               PartOffset),
                          PartPtrTy, BasePtr->getName() + "."),
           getAdjustedAlignment(LI, PartOffset, DL), /*IsVolatile*/ false,
           LI->getName());

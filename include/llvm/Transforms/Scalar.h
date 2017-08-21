@@ -437,6 +437,15 @@ extern char &InferAddressSpacesID;
 
 //===----------------------------------------------------------------------===//
 //
+// LowerAlloca - Insert address space casts for alloca's returning pointer
+// in the generic address space, which helps subsequent InferAddressSpacePass
+// to replace load/store in generic address space with load/store in private
+// address space.
+//
+BasicBlockPass *createLowerAllocaPass();
+
+//===----------------------------------------------------------------------===//
+//
 // InstructionSimplifier - Remove redundant instructions.
 //
 FunctionPass *createInstructionSimplifierPass();

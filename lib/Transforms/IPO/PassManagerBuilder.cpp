@@ -472,6 +472,7 @@ void PassManagerBuilder::populateModulePassManager(
 
     MPM.add(createIPSCCPPass());          // IP SCCP
     MPM.add(createGlobalOptimizerPass()); // Optimize out global vars
+    MPM.add(createInferAddressSpacesPass());
     // Promote any localized global vars.
     MPM.add(createPromoteMemoryToRegisterPass());
 
@@ -727,6 +728,7 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
 
   // Now that we internalized some globals, see if we can hack on them!
   PM.add(createGlobalOptimizerPass());
+  PM.add(createInferAddressSpacesPass());
   // Promote any localized global vars.
   PM.add(createPromoteMemoryToRegisterPass());
 
