@@ -820,7 +820,8 @@ namespace AMDGPU {
 AMDGPUAS getAMDGPUAS(Triple T) {
   auto Env = T.getEnvironmentName();
   AMDGPUAS AS;
-  if (Env == "amdgiz" || Env == "amdgizcl") {
+  if (Env == "amdgiz" || Env == "amdgizcl" ||
+      T.getEnvironment() == Triple::HCC) {
     AS.FLAT_ADDRESS     = 0;
     AS.PRIVATE_ADDRESS  = 5;
     AS.REGION_ADDRESS   = 4;
