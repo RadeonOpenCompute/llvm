@@ -662,7 +662,7 @@ public:
   }
 
   /// Tests wether the target supports comdat
-  bool supportsCOMDAT() const { return !isOSBinFormatMachO() && (getArch() != Triple::amdgcn); }
+  bool supportsCOMDAT() const { return !isOSBinFormatMachO() && !isOSBinFormatWasm() && (getArch() != Triple::amdgcn); }
 
   /// @}
   /// @name Mutators

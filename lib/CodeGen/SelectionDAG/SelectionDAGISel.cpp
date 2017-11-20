@@ -49,6 +49,9 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/StackProtector.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -82,11 +85,8 @@
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
-#include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <algorithm>
 #include <cassert>
@@ -1142,7 +1142,7 @@ static void processDbgDeclares(FunctionLoweringInfo *FuncInfo) {
 
       // Look through casts and constant offset GEPs. These mostly come from
       // inalloca.
-      APInt Offset(DL.getPointerSizeInBits(0), 0);
+      APInt Offset(DL.getTypeSizeInBits(Address->getType()), 0);
       Address = Address->stripAndAccumulateInBoundsConstantOffsets(DL, Offset);
 
       // Check if the variable is a static alloca or a byval or inalloca
