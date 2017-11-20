@@ -293,10 +293,8 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, MVT::i32, Expand);
   setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, MVT::i64, Expand);
 
-  if (getSubtarget()->hasFlatAddressSpace()) {
-    setOperationAction(ISD::ADDRSPACECAST, MVT::i32, Custom);
-    setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
-  }
+  setOperationAction(ISD::ADDRSPACECAST, MVT::i32, Custom);
+  setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
 
   setOperationAction(ISD::BSWAP, MVT::i32, Legal);
   setOperationAction(ISD::BITREVERSE, MVT::i32, Legal);
@@ -3620,7 +3618,9 @@ SDValue SITargetLowering::getSegmentAperture(unsigned AS, const SDLoc &DL,
   MachineFunction &MF = DAG.getMachineFunction();
   SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
   unsigned UserSGPR = Info->getQueuePtrUserSGPR();
-  assert(UserSGPR != AMDGPU::NoRegister);
+  if (UserSGPR == AMDGPU::NoRegister) {
+    return DAG.getConstant(0, DL, MVT::i32);
+  }
 
   SDValue QueuePtr = CreateLiveInRegister(
     DAG, &AMDGPU::SReg_64RegClass, UserSGPR, MVT::i64);
@@ -3658,6 +3658,11 @@ SDValue SITargetLowering::lowerADDRSPACECAST(SDValue Op,
 
   // flat -> local/private
   if (ASC->getSrcAddressSpace() == AMDGPUASI.FLAT_ADDRESS) {
+    if (ASC->getDestAddressSpace() == AMDGPUASI.PRIVATE_ADDRESS
+        && Src->getOpcode() == ISD::FrameIndex) {
+      return DAG.getTargetFrameIndex(cast<FrameIndexSDNode>(Src.getNode())->
+          getIndex(), MVT::i32);
+    }
     unsigned DestAS = ASC->getDestAddressSpace();
 
     if (DestAS == AMDGPUASI.LOCAL_ADDRESS ||

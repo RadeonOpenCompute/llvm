@@ -20,49 +20,64 @@
 //   %Generic = addrspacecast i32 addrspace(5)* %A to i32*
 //   store i32 0, i32 addrspace(5)* %Generic ; emits st.local.u32
 //
-// And we will rely on NVPTXInferAddressSpaces to combine the last two
+// And we will rely on InferAddressSpaces to combine the last two
 // instructions.
 //
 //===----------------------------------------------------------------------===//
 
-#include "NVPTX.h"
-#include "NVPTXUtilities.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/Scalar.h"
 
 using namespace llvm;
 
 namespace llvm {
-void initializeNVPTXLowerAllocaPass(PassRegistry &);
+void initializeLowerAllocaPass(PassRegistry &);
 }
 
 namespace {
-class NVPTXLowerAlloca : public BasicBlockPass {
+static const unsigned UninitializedAddressSpace = ~0u;
+
+class LowerAlloca : public BasicBlockPass {
   bool runOnBasicBlock(BasicBlock &BB) override;
+  unsigned FlatAddrSpace;
+  unsigned PrivateAddrSpace;
 
 public:
   static char ID; // Pass identification, replacement for typeid
-  NVPTXLowerAlloca() : BasicBlockPass(ID) {}
+  LowerAlloca() : BasicBlockPass(ID) {}
   StringRef getPassName() const override {
     return "convert address space of alloca'ed memory to local";
+  }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
   }
 };
 } // namespace
 
-char NVPTXLowerAlloca::ID = 1;
+char LowerAlloca::ID = 1;
 
-INITIALIZE_PASS(NVPTXLowerAlloca, "nvptx-lower-alloca",
+INITIALIZE_PASS(LowerAlloca, "lower-alloca",
                 "Lower Alloca", false, false)
 
 // =============================================================================
 // Main function for this pass.
 // =============================================================================
-bool NVPTXLowerAlloca::runOnBasicBlock(BasicBlock &BB) {
+bool LowerAlloca::runOnBasicBlock(BasicBlock &BB) {
   if (skipBasicBlock(BB))
+    return false;
+  const TargetTransformInfo &TTI =
+      getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*BB.getParent());
+  FlatAddrSpace = TTI.getFlatAddressSpace();
+  PrivateAddrSpace = TTI.getPrivateAddressSpace();
+  if (FlatAddrSpace == UninitializedAddressSpace ||
+      PrivateAddrSpace == UninitializedAddressSpace)
     return false;
 
   bool Changed = false;
@@ -71,9 +86,9 @@ bool NVPTXLowerAlloca::runOnBasicBlock(BasicBlock &BB) {
       Changed = true;
       auto PTy = dyn_cast<PointerType>(allocaInst->getType());
       auto ETy = PTy->getElementType();
-      auto LocalAddrTy = PointerType::get(ETy, ADDRESS_SPACE_LOCAL);
+      auto LocalAddrTy = PointerType::get(ETy, PrivateAddrSpace);
       auto NewASCToLocal = new AddrSpaceCastInst(allocaInst, LocalAddrTy, "");
-      auto GenericAddrTy = PointerType::get(ETy, ADDRESS_SPACE_GENERIC);
+      auto GenericAddrTy = PointerType::get(ETy, FlatAddrSpace);
       auto NewASCToGeneric = new AddrSpaceCastInst(NewASCToLocal,
                                                     GenericAddrTy, "");
       NewASCToLocal->insertAfter(allocaInst);
@@ -113,6 +128,6 @@ bool NVPTXLowerAlloca::runOnBasicBlock(BasicBlock &BB) {
   return Changed;
 }
 
-BasicBlockPass *llvm::createNVPTXLowerAllocaPass() {
-  return new NVPTXLowerAlloca();
+BasicBlockPass *llvm::createLowerAllocaPass() {
+  return new LowerAlloca();
 }

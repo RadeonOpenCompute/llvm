@@ -49,6 +49,10 @@ public:
     return AddressSpace::ADDRESS_SPACE_GENERIC;
   }
 
+  unsigned getPrivateAddressSpace() const {
+    return AddressSpace::ADDRESS_SPACE_LOCAL;
+  }
+
   // Increase the inlining cost threshold by a factor of 5, reflecting that
   // calls are particularly expensive in NVPTX.
   unsigned getInliningThresholdMultiplier() { return 5; }

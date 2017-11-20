@@ -21,6 +21,9 @@
 namespace llvm {
 class Module;
 
+// Set to true depending on option -force-import-weak
+extern bool ForceImportWeakFlag;
+
 /// Class to handle necessary GlobalValue changes required by ThinLTO
 /// function importing, including linkage changes and any necessary renaming.
 class FunctionImportGlobalProcessing {

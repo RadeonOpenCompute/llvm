@@ -236,7 +236,8 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case CoreCLR: return "coreclr";
   case OpenCL: return "opencl";
   case Simulator: return "simulator";
-  }
+  case HCC: return "hcc";
+   }
 
   llvm_unreachable("Invalid EnvironmentType!");
 }
@@ -527,6 +528,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
     .StartsWith("coreclr", Triple::CoreCLR)
     .StartsWith("opencl", Triple::OpenCL)
     .StartsWith("simulator", Triple::Simulator)
+    .StartsWith("hcc", Triple::HCC)
     .Default(Triple::UnknownEnvironment);
 }
 

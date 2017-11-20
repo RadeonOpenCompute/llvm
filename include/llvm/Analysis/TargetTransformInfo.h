@@ -317,6 +317,10 @@ public:
   /// optimize away.
   unsigned getFlatAddressSpace() const;
 
+  /// Returns the address space ID for a target's 'private' address space.
+  /// Note this is not necessarily the same as addrspace(0).
+  unsigned getPrivateAddressSpace() const;
+
   /// \brief Test whether calls to a function lower to actual program function
   /// calls.
   ///
@@ -962,6 +966,7 @@ public:
   virtual bool isSourceOfDivergence(const Value *V) = 0;
   virtual bool isAlwaysUniform(const Value *V) = 0;
   virtual unsigned getFlatAddressSpace() = 0;
+  virtual unsigned getPrivateAddressSpace() = 0;
   virtual bool isLoweredToCall(const Function *F) = 0;
   virtual void getUnrollingPreferences(Loop *L, ScalarEvolution &,
                                        UnrollingPreferences &UP) = 0;
@@ -1165,6 +1170,9 @@ public:
 
   unsigned getFlatAddressSpace() override {
     return Impl.getFlatAddressSpace();
+  }
+  unsigned getPrivateAddressSpace() override {
+    return Impl.getPrivateAddressSpace();
   }
 
   bool isLoweredToCall(const Function *F) override {

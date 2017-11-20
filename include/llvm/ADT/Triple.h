@@ -206,7 +206,8 @@ public:
     CoreCLR,
     OpenCL,
     Simulator,  // Simulator variants of other systems, e.g., Apple's iOS
-    LastEnvironmentType = Simulator
+    HCC,
+    LastEnvironmentType = HCC
   };
   enum ObjectFormatType {
     UnknownObjectFormat,
@@ -661,9 +662,7 @@ public:
   }
 
   /// Tests wether the target supports comdat
-  bool supportsCOMDAT() const {
-    return !isOSBinFormatMachO() && !isOSBinFormatWasm();
-  }
+  bool supportsCOMDAT() const { return !isOSBinFormatMachO() && !isOSBinFormatWasm() && (getArch() != Triple::amdgcn); }
 
   /// @}
   /// @name Mutators

@@ -91,3 +91,6 @@ add_llvm_library(LLVMAnalysis
   DEPENDS
   intrinsics_gen
   )
+
+add_dependencies(LLVMAnalysis intrinsics_gen)
+add_subdirectory(TileUniform)
