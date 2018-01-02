@@ -269,8 +269,13 @@ void llvm::SplitModule(
   // cloning it.
   for (unsigned I = 0; I < N; ++I) {
     ValueToValueMapTy VMap;
+    int HCCKernelIndex = 0;
     std::unique_ptr<Module> MPart(
         CloneModule(M.get(), VMap, [&](const GlobalValue *GV) {
+          if (const Function *F = dyn_cast<Function>(GV)) {
+            if (F->getCallingConv() == CallingConv::AMDGPU_KERNEL)
+              return ((HCCKernelIndex++) % N == I);
+          }
           if (ClusterIDMap.count(GV))
             return (ClusterIDMap[GV] == I);
           else

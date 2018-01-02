@@ -53,9 +53,11 @@ public:
 struct TargetMachineBuilder {
   Triple TheTriple;
   std::string MCpu;
+  std::string FeaturesStr;
   std::string MAttr;
   TargetOptions Options;
   Optional<Reloc::Model> RelocModel;
+  Optional<CodeModel::Model> CodeModel;
   CodeGenOpt::Level CGOptLevel = CodeGenOpt::Aggressive;
 
   std::unique_ptr<TargetMachine> create() const;
@@ -202,6 +204,9 @@ public:
   /// CPU to use to initialize the TargetMachine
   void setCpu(std::string Cpu) { TMBuilder.MCpu = std::move(Cpu); }
 
+  /// Feature options
+  void setFeatures(std::string Features) { TMBuilder.FeaturesStr = std::move(Features); }
+
   /// Subtarget attributes
   void setAttr(std::string MAttr) { TMBuilder.MAttr = std::move(MAttr); }
 
@@ -214,9 +219,20 @@ public:
   /// assume builtins are present on the target.
   void setFreestanding(bool Enabled) { Freestanding = Enabled; }
 
+  /// Enable list of explicit Opt passes
+  void setPassList(std::vector<const llvm::PassInfo*> PL) { PassList = PL; }
+
+  /// Enable ISA Assembly File Output
+  void setEnableISAAssemblyFile(bool Enabled) {EnableISAAssemblyFile = Enabled; }
+
   /// CodeModel
   void setCodePICModel(Optional<Reloc::Model> Model) {
     TMBuilder.RelocModel = Model;
+  }
+
+  /// CodeModel
+  void setCodeModel(Optional<CodeModel::Model> Model) {
+    TMBuilder.CodeModel = Model;
   }
 
   /// CodeGen optimization level
@@ -286,6 +302,11 @@ public:
   void optimize(Module &Module);
 
   /**
+   * Perform ThinLTO Optimizations and CodeGen.
+   */
+  void optllc();
+
+  /**
    * Perform ThinLTO CodeGen.
    */
   std::unique_ptr<MemoryBuffer> codegen(Module &Module);
@@ -334,6 +355,12 @@ private:
   /// Flag to indicate that the optimizer should not assume builtins are present
   /// on the target.
   bool Freestanding = false;
+
+  /// Vector of explicitly enabled passes for optimization
+  std::vector<const llvm::PassInfo*> PassList;
+
+  /// Flag to indicate that the CodeGen should emit Assembly File
+  bool EnableISAAssemblyFile = false;
 
   /// IR Optimization Level [0-3].
   unsigned OptLevel = 3;
