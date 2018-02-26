@@ -70,6 +70,10 @@ static cl::opt<char>
                            "(default = '-O2')"),
              cl::Prefix, cl::ZeroOrMore, cl::init('2'));
 
+static cl::opt<char>
+    CodeGenOptLevel("codegen-opt-level", cl::init('3'),
+                    cl::desc("Override optimization level for codegen hooks"));
+
 static cl::opt<bool>
     IndexStats("thinlto-index-stats",
                cl::desc("Print statistic for the index in every input files"),
@@ -94,6 +98,26 @@ static cl::opt<bool> EnableFreestanding(
     "lto-freestanding", cl::init(false),
     cl::desc("Enable Freestanding (disable builtins / TLI) during LTO"));
 
+static cl::opt<bool> EnableDeadCodeElimination(
+    "dce", cl::init(false),
+    cl::desc("Removes dead instructions"));
+
+static cl::opt<bool> EnableGlobalDCE(
+    "globaldce", cl::init(false),
+    cl::desc("Eliminate unreachable internal globals (functions or global variables)"));
+
+static cl::opt<bool> EnableAlwaysInline(
+    "always-inline", cl::init(false),
+    cl::desc("Inline and remove functions marked as always_inline"));
+
+static cl::opt<bool> EnableInferAddressSpaces(
+    "infer-address-spaces", cl::init(false),
+    cl::desc("Propagates address spaces from type-qualified variable declarations"));
+
+static cl::opt<bool> EnableISAAssemblyFile(
+    "dump-isa", cl::init(false),
+    cl::desc("Emit ISA assembly file instead of binary"));
+
 static cl::opt<bool> UseDiagnosticHandler(
     "use-diagnostic-handler", cl::init(false),
     cl::desc("Use a diagnostic handler to test the handler interface"));
@@ -110,6 +134,7 @@ enum ThinLTOModes {
   THINIMPORT,
   THININTERNALIZE,
   THINOPT,
+  THINOPTLLC,
   THINCODEGEN,
   THINALL
 };
@@ -133,6 +158,7 @@ cl::opt<ThinLTOModes> ThinLTOMode(
                    "Perform internalization driven by -exported-symbol "
                    "(requires -thinlto-index)."),
         clEnumValN(THINOPT, "optimize", "Perform ThinLTO optimizations."),
+        clEnumValN(THINOPTLLC, "optllc", "Perform ThinLTO optimizations and CodeGen."),
         clEnumValN(THINCODEGEN, "codegen", "CodeGen (expected to match llc)"),
         clEnumValN(THINALL, "run", "Perform ThinLTO end-to-end")));
 
@@ -474,7 +500,41 @@ public:
     ThinGenerator.setTargetOptions(Options);
     ThinGenerator.setCacheDir(ThinLTOCacheDir);
     ThinGenerator.setCachePruningInterval(ThinLTOCachePruningInterval);
+    ThinGenerator.setCpu(getCPUStr());
+    ThinGenerator.setFeatures(getFeaturesStr());
+    ThinGenerator.setCodeModel(getCodeModel());
+
+    ThinGenerator.setSelectAcceleratorCode(EnableSelectAcceleratorCode);
+    ThinGenerator.setDeadCodeElimination(EnableDeadCodeElimination);
+    ThinGenerator.setGlobalDCE(EnableGlobalDCE);
+    ThinGenerator.setAlwaysInline(EnableAlwaysInline);
     ThinGenerator.setFreestanding(EnableFreestanding);
+    ThinGenerator.setInferAddressSpaces(EnableInferAddressSpaces);
+    ThinGenerator.setEnableISAAssemblyFile(EnableISAAssemblyFile);
+
+    unsigned OLvl = 3;
+    switch (OptLevel) {
+    default:
+      errs() << OptLevel << ": invalid optimization level.\n";
+    case ' ': break;
+    case '0': OLvl = 0; break;
+    case '1': OLvl = 1; break;
+    case '2': OLvl = 2; break;
+    case '3': OLvl = 3; break;
+    }
+    ThinGenerator.setOptLevel(OLvl);
+
+    CodeGenOpt::Level CGOptLvl = CodeGenOpt::Aggressive;
+    switch (CodeGenOptLevel) {
+    default:
+      errs() << CodeGenOptLevel << ": invalid codegen opt level.\n";
+    case ' ': break;
+    case '0': CGOptLvl = CodeGenOpt::None; break;
+    case '1': CGOptLvl = CodeGenOpt::Less; break;
+    case '2': CGOptLvl = CodeGenOpt::Default; break;
+    case '3': CGOptLvl = CodeGenOpt::Aggressive; break;
+    }
+    ThinGenerator.setCodeGenOptLevel(CGOptLvl);
 
     // Add all the exported symbols to the table of symbols to preserve.
     for (unsigned i = 0; i < ExportedSymbols.size(); ++i)
@@ -497,6 +557,8 @@ public:
       return internalize();
     case THINOPT:
       return optimize();
+    case THINOPTLLC:
+      return optllc();
     case THINCODEGEN:
       return codegen();
     case THINALL:
@@ -697,6 +759,57 @@ private:
         OutputName = Filename + ".thinlto.imported.bc";
       }
       writeModuleToFile(*TheModule, OutputName);
+    }
+  }
+
+  void optllc() {
+    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+      report_fatal_error("Can't handle a single output filename and multiple "
+                         "input files, do not provide an output filename and "
+                         "the output files will be suffixed from the input "
+                         "ones.");
+    if (!ThinLTOIndex.empty())
+      errs() << "Warning: -thinlto-index ignored for optllc stage";
+
+    LLVMContext Ctx;
+    std::vector<std::unique_ptr<MemoryBuffer>> InputBuffers;
+    for (unsigned i = 0; i < InputFilenames.size(); ++i) {
+      auto &Filename = InputFilenames[i];
+      StringRef CurrentActivity = "loading file '" + Filename + "'";
+      auto InputOrErr = MemoryBuffer::getFile(Filename);
+      error(InputOrErr, "error " + CurrentActivity);
+      InputBuffers.push_back(std::move(*InputOrErr));
+      ThinGenerator.addModule(Filename, InputBuffers.back()->getBuffer());
+    }
+
+    if (!ThinLTOSaveTempsPrefix.empty())
+      ThinGenerator.setSaveTempsDir(ThinLTOSaveTempsPrefix);
+
+    if (!ThinLTOGeneratedObjectsDir.empty()) {
+      ThinGenerator.setGeneratedObjectsDirectory(ThinLTOGeneratedObjectsDir);
+      ThinGenerator.optllc();
+      return;
+    }
+
+    ThinGenerator.optllc();
+
+    auto &Binaries = ThinGenerator.getProducedBinaries();
+    if (Binaries.size() != InputFilenames.size())
+      report_fatal_error("Number of output objects does not match the number "
+                         "of inputs");
+
+    for (unsigned BufID = 0; BufID < Binaries.size(); ++BufID) {
+      std::error_code EC;
+      sys::fs::OpenFlags OpenFlags = sys::fs::F_None;
+      auto OutputName = InputFilenames[BufID] + ".thinlto.isabin";
+      if (EnableISAAssemblyFile){
+        OutputName.clear();
+        OutputName = InputFilenames[BufID] + ".thinlto.isa";
+        OpenFlags |= sys::fs::F_Text;
+      }
+      raw_fd_ostream OS(OutputName, EC, OpenFlags);
+      error(EC, "error opening the file '" + OutputName + "'");
+      OS << Binaries[BufID]->getBuffer();
     }
   }
 

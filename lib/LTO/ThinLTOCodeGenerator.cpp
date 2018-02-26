@@ -46,10 +46,12 @@
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/FunctionImport.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/ObjCARC.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
 
 #include <numeric>
@@ -69,6 +71,9 @@ namespace {
 
 static cl::opt<int>
     ThreadCount("threads", cl::init(llvm::heavyweight_hardware_concurrency()));
+
+static cl::opt<std::string>
+    TargetTriple("mtriple", cl::desc("Override target triple for module"));
 
 // Simple helper to save temporary files for debug.
 static void saveTempBitcode(const Module &TheModule, StringRef TempDir,
@@ -239,6 +244,49 @@ static void optimizeModule(Module &TheModule, TargetMachine &TM,
   PM.run(TheModule);
 }
 
+static void optimizeModule2(Module &TheModule, TargetMachine &TM,
+                           unsigned OptLevel, bool Freestanding,
+                           bool DeadCodeElimination, bool GlobalDCE,
+                           bool AlwaysInline, bool InferAddressSpaces) {
+  // Populate the PassManager
+  PassManagerBuilder PMB;
+  PMB.LibraryInfo = new TargetLibraryInfoImpl(TM.getTargetTriple());
+  if (Freestanding)
+    PMB.LibraryInfo->disableAllFunctions();
+  PMB.Inliner = createFunctionInliningPass(1048576);
+  // FIXME: should get it from the bitcode?
+  PMB.OptLevel = OptLevel;
+  PMB.LoopVectorize = true;
+  PMB.SLPVectorize = true;
+  // Already did this in verifyLoadedModule().
+  PMB.VerifyInput = false;
+  PMB.VerifyOutput = false;
+
+  legacy::PassManager PM;
+
+  // Add the TTI (required to inform the vectorizer about register size for
+  // instance)
+  PM.add(createTargetTransformInfoWrapperPass(TM.getTargetIRAnalysis()));
+
+  if (DeadCodeElimination) {
+    PM.add(createDeadCodeEliminationPass());
+  }
+  if (GlobalDCE){
+    PM.add(createGlobalDCEPass());
+  }
+  if (AlwaysInline){
+    PM.add(createAlwaysInlinerLegacyPass(AlwaysInline));
+  }
+  if (InferAddressSpaces) {
+    PM.add(createInferAddressSpacesPass());
+  }
+
+  // Add optimizations
+  PMB.populateModulePassManager(PM);
+
+  PM.run(TheModule);
+}
+
 // Convert the PreservedSymbols map from "Name" based to "GUID" based.
 static DenseSet<GlobalValue::GUID>
 computeGUIDPreservedSymbols(const StringSet<> &PreservedSymbols,
@@ -254,7 +302,8 @@ computeGUIDPreservedSymbols(const StringSet<> &PreservedSymbols,
 }
 
 std::unique_ptr<MemoryBuffer> codegenModule(Module &TheModule,
-                                            TargetMachine &TM) {
+                                            TargetMachine &TM,
+                                            bool EnableISAAssemblyFile) {
   SmallVector<char, 128> OutputBuffer;
 
   // CodeGen
@@ -264,10 +313,15 @@ std::unique_ptr<MemoryBuffer> codegenModule(Module &TheModule,
 
     // If the bitcode files contain ARC code and were compiled with optimization,
     // the ObjCARCContractPass must be run, so do it unconditionally here.
-    PM.add(createObjCARCContractPass());
+    if (TM.getTargetTriple().str() != "amdgcn--amdhsa-amdgiz")
+      PM.add(createObjCARCContractPass());
+
+    TargetMachine::CodeGenFileType EmitType = TargetMachine::CGFT_ObjectFile;
+    if (EnableISAAssemblyFile)
+      EmitType = TargetMachine::CGFT_AssemblyFile;
 
     // Setup the codegen now.
-    if (TM.addPassesToEmitFile(PM, OS, TargetMachine::CGFT_ObjectFile,
+    if (TM.addPassesToEmitFile(PM, OS, EmitType,
                                /* DisableVerify */ true))
       report_fatal_error("Failed to setup codegen");
 
@@ -481,7 +535,7 @@ ProcessThinLTOModule(Module &TheModule, ModuleSummaryIndex &Index,
     return make_unique<ObjectMemoryBuffer>(std::move(OutputBuffer));
   }
 
-  return codegenModule(TheModule, TM);
+  return codegenModule(TheModule, TM, false);
 }
 
 /// Resolve LinkOnce/Weak symbols. Record resolutions in the \p ResolvedODR map
@@ -576,14 +630,19 @@ std::unique_ptr<TargetMachine> TargetMachineBuilder::create() const {
     report_fatal_error("Can't load target for this Triple: " + ErrMsg);
   }
 
+  std::string FeatureStr;
   // Use MAttr as the default set of features.
-  SubtargetFeatures Features(MAttr);
-  Features.getDefaultSubtargetFeatures(TheTriple);
-  std::string FeatureStr = Features.getString();
+  if (!FeaturesStr.empty())
+    FeatureStr = FeaturesStr;
+  else {
+    SubtargetFeatures Features(MAttr);
+    Features.getDefaultSubtargetFeatures(TheTriple);
+    FeatureStr = Features.getString();
+  }
 
   return std::unique_ptr<TargetMachine>(
       TheTarget->createTargetMachine(TheTriple.str(), MCpu, FeatureStr, Options,
-                                     RelocModel, None, CGOptLevel));
+                                     RelocModel, CodeModel, CGOptLevel));
 }
 
 /**
@@ -802,7 +861,7 @@ void ThinLTOCodeGenerator::optimize(Module &TheModule) {
  */
 std::unique_ptr<MemoryBuffer> ThinLTOCodeGenerator::codegen(Module &TheModule) {
   initTMBuilder(TMBuilder, Triple(TheModule.getTargetTriple()));
-  return codegenModule(TheModule, *TMBuilder.create());
+  return codegenModule(TheModule, *TMBuilder.create(), EnableISAAssemblyFile);
 }
 
 /// Write out the generated object file, either from CacheEntryPath or from
@@ -840,6 +899,89 @@ static std::string writeGeneratedObject(int count, StringRef CacheEntryPath,
     report_fatal_error("Can't open output '" + OutputPath + "'\n");
   OS << OutputBuffer.getBuffer();
   return OutputPath.str();
+}
+
+/**
+ * Perform ThinLTO Optimizations and CodeGen.
+ */
+void ThinLTOCodeGenerator::optllc() {
+  // Prepare the resulting object vector
+  assert(ProducedBinaries.empty() && "The generator should not be reused");
+  if (SavedObjectsDirectoryPath.empty())
+    ProducedBinaries.resize(Modules.size());
+  else {
+    sys::fs::create_directories(SavedObjectsDirectoryPath);
+    bool IsDir;
+    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
+    if (!IsDir)
+      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
+    ProducedBinaryFiles.resize(Modules.size());
+  }
+
+  // Compute the ordering we will process the inputs: the rough heuristic here
+  // is to sort them per size so that the largest module get schedule as soon as
+  // possible. This is purely a compile-time optimization.
+  std::vector<int> ModulesOrdering;
+  ModulesOrdering.resize(Modules.size());
+  std::iota(ModulesOrdering.begin(), ModulesOrdering.end(), 0);
+  std::sort(ModulesOrdering.begin(), ModulesOrdering.end(),
+            [&](int LeftIndex, int RightIndex) {
+              auto LSize = Modules[LeftIndex].getBuffer().size();
+              auto RSize = Modules[RightIndex].getBuffer().size();
+              return LSize > RSize;
+            });
+
+  // Parallel optimizer + codegen
+  {
+    ThreadPool Pool(ThreadCount);
+    for (auto IndexCount : ModulesOrdering) {
+      auto &ModuleBuffer = Modules[IndexCount];
+      Pool.async([&](int count) {
+        LLVMContext Context;
+        Context.setDiscardValueNames(LTODiscardValueNames);
+        Context.enableDebugTypeODRUniquing();
+        auto DiagFileOrErr = lto::setupOptimizationRemarks(
+            Context, LTORemarksFilename, LTOPassRemarksWithHotness, count);
+        if (!DiagFileOrErr) {
+          errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";
+          report_fatal_error("ThinLTO: Can't get an output file for the "
+                             "remarks");
+        }
+
+        // Parse module now
+        auto TheModule =
+            loadModuleFromBuffer(ModuleBuffer.getMemBuffer(), Context,
+                                 /*IsLazy*/ false,
+                                 /*IsImporting*/ false);
+
+        // If we are supposed to override the target triple, do so now.
+        if (!TargetTriple.empty())
+          TheModule->setTargetTriple(Triple::normalize(TargetTriple));
+
+        initTMBuilder(TMBuilder, Triple((*TheModule).getTargetTriple()));
+
+        // Save temps: original file.
+        saveTempBitcode(*TheModule, SaveTempsDir, count, ".0.original.bc");
+
+        // Optimizations
+        optimizeModule2(*TheModule, *TMBuilder.create(), OptLevel, Freestanding,
+                       DeadCodeElimination, GlobalDCE, AlwaysInline, InferAddressSpaces);
+
+        // Save temps: optimized file.
+        saveTempBitcode(*TheModule, SaveTempsDir, count, ".1.opt.bc");
+
+        // CodeGen
+        auto OutputBuffer = codegenModule(*TheModule, *TMBuilder.create(), EnableISAAssemblyFile);
+        if (SavedObjectsDirectoryPath.empty()) {
+          ProducedBinaries[count] = std::move(OutputBuffer);
+        }
+        else {
+        ProducedBinaryFiles[count] = writeGeneratedObject(
+            count, "", SavedObjectsDirectoryPath, *OutputBuffer);
+        }
+      }, IndexCount);
+    }
+  }
 }
 
 // Main entry point for the ThinLTO processing
