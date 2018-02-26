@@ -213,6 +213,9 @@ public:
   /// assume builtins are present on the target.
   void setFreestanding(bool Enabled) { Freestanding = Enabled; }
 
+  /// Enable list of explicit Opt passes
+  void setPassList(std::vector<const llvm::PassInfo*> PL) { PassList = PL; }
+
   /// CodeModel
   void setCodePICModel(Optional<Reloc::Model> Model) {
     TMBuilder.RelocModel = Model;
@@ -285,6 +288,11 @@ public:
   void optimize(Module &Module);
 
   /**
+   * Perform ThinLTO Optimizations and CodeGen.
+   */
+  void optllc();
+
+  /**
    * Perform ThinLTO CodeGen.
    */
   std::unique_ptr<MemoryBuffer> codegen(Module &Module);
@@ -333,6 +341,9 @@ private:
   /// Flag to indicate that the optimizer should not assume builtins are present
   /// on the target.
   bool Freestanding = false;
+
+  /// Vector of explicitly enabled passes for optimization
+  std::vector<const llvm::PassInfo*> PassList;
 
   /// IR Optimization Level [0-3].
   unsigned OptLevel = 3;

@@ -25,11 +25,14 @@
 #include "llvm/CodeGen/CommandFlags.def"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/LinkAllPasses.h"
 #include "llvm/LTO/legacy/LTOCodeGenerator.h"
 #include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/LTO/legacy/ThinLTOCodeGenerator.h"
@@ -43,6 +46,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
@@ -65,10 +69,20 @@
 
 using namespace llvm;
 
+// The OptimizationList is automatically populated with registered Passes by the
+// PassNameParser.
+//
+static cl::list<const PassInfo*, bool, PassNameParser>
+    PassList(cl::desc("Optimizations available:"));
+
 static cl::opt<char>
     OptLevel("O", cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
                            "(default = '-O2')"),
              cl::Prefix, cl::ZeroOrMore, cl::init('2'));
+
+static cl::opt<char>
+    CodeGenOptLevel("codegen-opt-level", cl::init('3'),
+                    cl::desc("Override optimization level for codegen hooks"));
 
 static cl::opt<bool>
     IndexStats("thinlto-index-stats",
@@ -110,6 +124,7 @@ enum ThinLTOModes {
   THINIMPORT,
   THININTERNALIZE,
   THINOPT,
+  THINOPTLLC,
   THINCODEGEN,
   THINALL
 };
@@ -133,6 +148,7 @@ cl::opt<ThinLTOModes> ThinLTOMode(
                    "Perform internalization driven by -exported-symbol "
                    "(requires -thinlto-index)."),
         clEnumValN(THINOPT, "optimize", "Perform ThinLTO optimizations."),
+        clEnumValN(THINOPTLLC, "optllc", "Perform ThinLTO optimizations and CodeGen."),
         clEnumValN(THINCODEGEN, "codegen", "CodeGen (expected to match llc)"),
         clEnumValN(THINALL, "run", "Perform ThinLTO end-to-end")));
 
@@ -474,7 +490,33 @@ public:
     ThinGenerator.setTargetOptions(Options);
     ThinGenerator.setCacheDir(ThinLTOCacheDir);
     ThinGenerator.setCachePruningInterval(ThinLTOCachePruningInterval);
+
+    ThinGenerator.setPassList(PassList);
     ThinGenerator.setFreestanding(EnableFreestanding);
+
+    unsigned OLvl = 3;
+    switch (OptLevel) {
+    default:
+      errs() << OptLevel << ": invalid optimization level.\n";
+    case ' ': break;
+    case '0': OLvl = 0; break;
+    case '1': OLvl = 1; break;
+    case '2': OLvl = 2; break;
+    case '3': OLvl = 3; break;
+    }
+    ThinGenerator.setOptLevel(OLvl);
+
+    CodeGenOpt::Level CGOptLvl = CodeGenOpt::Aggressive;
+    switch (CodeGenOptLevel) {
+    default:
+      errs() << CodeGenOptLevel << ": invalid codegen opt level.\n";
+    case ' ': break;
+    case '0': CGOptLvl = CodeGenOpt::None; break;
+    case '1': CGOptLvl = CodeGenOpt::Less; break;
+    case '2': CGOptLvl = CodeGenOpt::Default; break;
+    case '3': CGOptLvl = CodeGenOpt::Aggressive; break;
+    }
+    ThinGenerator.setCodeGenOptLevel(CGOptLvl);
 
     // Add all the exported symbols to the table of symbols to preserve.
     for (unsigned i = 0; i < ExportedSymbols.size(); ++i)
@@ -497,6 +539,8 @@ public:
       return internalize();
     case THINOPT:
       return optimize();
+    case THINOPTLLC:
+      return optllc();
     case THINCODEGEN:
       return codegen();
     case THINALL:
@@ -700,6 +744,51 @@ private:
     }
   }
 
+  void optllc() {
+    if (InputFilenames.size() != 1 && !OutputFilename.empty())
+      report_fatal_error("Can't handle a single output filename and multiple "
+                         "input files, do not provide an output filename and "
+                         "the output files will be suffixed from the input "
+                         "ones.");
+    if (!ThinLTOIndex.empty())
+      errs() << "Warning: -thinlto-index ignored for optllc stage";
+
+    LLVMContext Ctx;
+    std::vector<std::unique_ptr<MemoryBuffer>> InputBuffers;
+    for (unsigned i = 0; i < InputFilenames.size(); ++i) {
+      auto &Filename = InputFilenames[i];
+      StringRef CurrentActivity = "loading file '" + Filename + "'";
+      auto InputOrErr = MemoryBuffer::getFile(Filename);
+      error(InputOrErr, "error " + CurrentActivity);
+      InputBuffers.push_back(std::move(*InputOrErr));
+      ThinGenerator.addModule(Filename, InputBuffers.back()->getBuffer());
+    }
+
+    if (!ThinLTOSaveTempsPrefix.empty())
+      ThinGenerator.setSaveTempsDir(ThinLTOSaveTempsPrefix);
+
+    if (!ThinLTOGeneratedObjectsDir.empty()) {
+      ThinGenerator.setGeneratedObjectsDirectory(ThinLTOGeneratedObjectsDir);
+      ThinGenerator.optllc();
+      return;
+    }
+
+    ThinGenerator.optllc();
+
+    auto &Binaries = ThinGenerator.getProducedBinaries();
+    if (Binaries.size() != InputFilenames.size())
+      report_fatal_error("Number of output objects does not match the number "
+                         "of inputs");
+
+    for (unsigned BufID = 0; BufID < Binaries.size(); ++BufID) {
+      auto OutputName = InputFilenames[BufID] + ".thinlto.isabin";
+      std::error_code EC;
+      raw_fd_ostream OS(OutputName, EC, sys::fs::OpenFlags::F_None);
+      error(EC, "error opening the file '" + OutputName + "'");
+      OS << Binaries[BufID]->getBuffer();
+    }
+  }
+
   void codegen() {
     if (InputFilenames.size() != 1 && !OutputFilename.empty())
       report_fatal_error("Can't handle a single output filename and multiple "
@@ -793,7 +882,6 @@ int main(int argc, char **argv) {
   PrettyStackTraceProgram X(argc, argv);
 
   llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
-  cl::ParseCommandLineOptions(argc, argv, "llvm LTO linker\n");
 
   if (OptLevel < '0' || OptLevel > '3')
     error("optimization level must be between 0 and 3");
@@ -803,6 +891,20 @@ int main(int argc, char **argv) {
   InitializeAllTargetMCs();
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
+
+  // Initialize passes
+  PassRegistry &Registry = *PassRegistry::getPassRegistry();
+  initializeCore(Registry);
+  initializeScalarOpts(Registry);
+  initializeVectorization(Registry);
+  initializeIPO(Registry);
+  initializeAnalysis(Registry);
+  initializeTransformUtils(Registry);
+  initializeInstCombine(Registry);
+  initializeInstrumentation(Registry);
+  initializeTarget(Registry);
+
+  cl::ParseCommandLineOptions(argc, argv, "llvm LTO linker\n");
 
   // set up the TargetOptions for the machine
   TargetOptions Options = InitTargetOptionsFromCodeGenFlags();

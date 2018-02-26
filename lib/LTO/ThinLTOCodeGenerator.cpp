@@ -23,6 +23,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/ExecutionEngine/ObjectMemoryBuffer.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
@@ -46,10 +47,12 @@
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/FunctionImport.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/ObjCARC.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
 
 #include <numeric>
@@ -69,6 +72,9 @@ namespace {
 
 static cl::opt<int>
     ThreadCount("threads", cl::init(llvm::heavyweight_hardware_concurrency()));
+
+static cl::opt<std::string>
+    TargetTriple("mtriple", cl::desc("Override target triple for module"));
 
 // Simple helper to save temporary files for debug.
 static void saveTempBitcode(const Module &TheModule, StringRef TempDir,
@@ -235,6 +241,67 @@ static void optimizeModule(Module &TheModule, TargetMachine &TM,
 
   // Add optimizations
   PMB.populateThinLTOPassManager(PM);
+
+  PM.run(TheModule);
+}
+
+static void optimizeModulePasses(Module &TheModule, TargetMachine &TM,
+                           unsigned OptLevel, bool Freestanding,
+                           std::vector<const llvm::PassInfo*> PassList) {
+  // Populate the PassManagerBuilder
+  PassManagerBuilder PMB;
+  PMB.LibraryInfo = new TargetLibraryInfoImpl(TM.getTargetTriple());
+  if (Freestanding)
+    PMB.LibraryInfo->disableAllFunctions();
+  PMB.Inliner = createFunctionInliningPass(1048576);
+  // FIXME: should get it from the bitcode?
+  PMB.OptLevel = OptLevel;
+  if (OptLevel != 0) {
+    PMB.LoopVectorize = true;
+    PMB.SLPVectorize = true;
+  }
+  // Already did this in verifyLoadedModule().
+  PMB.VerifyInput = false;
+  PMB.VerifyOutput = false;
+  TM.adjustPassManager(PMB);
+
+  // Populate the FunctionPassManager
+  std::unique_ptr<legacy::FunctionPassManager> FPM;
+  FPM.reset(new legacy::FunctionPassManager(&TheModule));
+  FPM->add(createTargetTransformInfoWrapperPass(TM.getTargetIRAnalysis()));
+  FPM->add(createVerifierPass());
+
+  // Pass Manager
+  legacy::PassManager PM;
+  // Add the TTI (required to inform the vectorizer about register size for
+  // instance)
+  PM.add(createTargetTransformInfoWrapperPass(TM.getTargetIRAnalysis()));
+
+  auto &LTM = static_cast<LLVMTargetMachine &>(TM);
+  Pass *TPC = LTM.createPassConfig(PM);
+  PM.add(TPC);
+
+  for (unsigned i = 0; i < PassList.size(); ++i) {
+    const PassInfo *PassInf = PassList[i];
+    Pass *P = nullptr;
+    if (PassInf->getNormalCtor())
+      P = PassInf->getNormalCtor()();
+    else
+      errs() << "ThinLTO: cannot create pass: "
+             << PassInf->getPassName() << "\n";
+    if (P) {
+      PM.add(P);
+    }
+  }
+
+  // Add optimizations to Builder, then add to PassManager
+  PMB.populateFunctionPassManager(*FPM);
+  PMB.populateModulePassManager(PM);
+
+  FPM->doInitialization();
+  for (Function &F : TheModule)
+    FPM->run(F);
+  FPM->doFinalization();
 
   PM.run(TheModule);
 }
@@ -840,6 +907,107 @@ static std::string writeGeneratedObject(int count, StringRef CacheEntryPath,
     report_fatal_error("Can't open output '" + OutputPath + "'\n");
   OS << OutputBuffer.getBuffer();
   return OutputPath.str();
+}
+
+static inline void setFunctionAttributes(StringRef CPU, StringRef Features,
+                                         Module &M) {
+  for (auto &F : M) {
+    auto &Ctx = F.getContext();
+    AttributeList Attrs = F.getAttributes();
+    AttrBuilder NewAttrs;
+
+    if (!CPU.empty())
+      NewAttrs.addAttribute("target-cpu", CPU);
+    if (!Features.empty())
+      NewAttrs.addAttribute("target-features", Features);
+
+    // Let NewAttrs override Attrs.
+    F.setAttributes(
+        Attrs.addAttributes(Ctx, AttributeList::FunctionIndex, NewAttrs));
+  }
+}
+
+/**
+ * Perform ThinLTO Optimizations and CodeGen.
+ */
+void ThinLTOCodeGenerator::optllc() {
+  // Prepare the resulting object vector
+  assert(ProducedBinaries.empty() && "The generator should not be reused");
+  if (SavedObjectsDirectoryPath.empty())
+    ProducedBinaries.resize(Modules.size());
+  else {
+    sys::fs::create_directories(SavedObjectsDirectoryPath);
+    bool IsDir;
+    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
+    if (!IsDir)
+      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
+    ProducedBinaryFiles.resize(Modules.size());
+  }
+
+  // Compute the ordering we will process the inputs: the rough heuristic here
+  // is to sort them per size so that the largest module get schedule as soon as
+  // possible. This is purely a compile-time optimization.
+  std::vector<int> ModulesOrdering;
+  ModulesOrdering.resize(Modules.size());
+  std::iota(ModulesOrdering.begin(), ModulesOrdering.end(), 0);
+  std::sort(ModulesOrdering.begin(), ModulesOrdering.end(),
+            [&](int LeftIndex, int RightIndex) {
+              auto LSize = Modules[LeftIndex].getBuffer().size();
+              auto RSize = Modules[RightIndex].getBuffer().size();
+              return LSize > RSize;
+            });
+
+  // Parallel optimizer + codegen
+  {
+    ThreadPool Pool(ThreadCount);
+    for (auto IndexCount : ModulesOrdering) {
+      auto &ModuleBuffer = Modules[IndexCount];
+      Pool.async([&](int count) {
+        LLVMContext Context;
+        Context.setDiscardValueNames(LTODiscardValueNames);
+        Context.enableDebugTypeODRUniquing();
+        auto DiagFileOrErr = lto::setupOptimizationRemarks(
+            Context, LTORemarksFilename, LTOPassRemarksWithHotness, count);
+        if (!DiagFileOrErr) {
+          errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";
+          report_fatal_error("ThinLTO: Can't get an output file for the "
+                             "remarks");
+        }
+
+        // Parse module now
+        auto TheModule =
+            loadModuleFromBuffer(ModuleBuffer.getMemBuffer(), Context,
+                                 /*IsLazy*/ false,
+                                 /*IsImporting*/ false);
+
+        // If we are supposed to override the target triple, do so now.
+        if (!TargetTriple.empty())
+          TheModule->setTargetTriple(Triple::normalize(TargetTriple));
+
+        initTMBuilder(TMBuilder, Triple((*TheModule).getTargetTriple()));
+
+        // Save temps: original file.
+        saveTempBitcode(*TheModule, SaveTempsDir, count, ".0.original.bc");
+
+        setFunctionAttributes(TMBuilder.MCpu, TMBuilder.FeaturesStr, *TheModule);
+        // Optimizations
+        optimizeModulePasses(*TheModule, *TMBuilder.create(), OptLevel, Freestanding, PassList);
+
+        // Save temps: optimized file.
+        saveTempBitcode(*TheModule, SaveTempsDir, count, ".1.opt.bc");
+
+        // CodeGen
+        auto OutputBuffer = codegenModule(*TheModule, *TMBuilder.create());
+        if (SavedObjectsDirectoryPath.empty()) {
+          ProducedBinaries[count] = std::move(OutputBuffer);
+        }
+        else {
+        ProducedBinaryFiles[count] = writeGeneratedObject(
+            count, "", SavedObjectsDirectoryPath, *OutputBuffer);
+        }
+      }, IndexCount);
+    }
+  }
 }
 
 // Main entry point for the ThinLTO processing

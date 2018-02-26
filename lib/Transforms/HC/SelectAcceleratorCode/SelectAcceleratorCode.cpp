@@ -163,11 +163,9 @@ public:
     }
 };
 char SelectAcceleratorCode::ID = 0;
-
-static RegisterPass<SelectAcceleratorCode> X{
+static RegisterPass<SelectAcceleratorCode> X(
     "select-accelerator-code",
-    "Selects only the code that is expected to run on an accelerator, "
-    "ensuring that it can be lowered by AMDGPU.",
+    "Select Accelerator Code",
     false,
-    false};
+    false);
 }
