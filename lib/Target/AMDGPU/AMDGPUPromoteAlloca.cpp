@@ -815,19 +815,12 @@ bool AMDGPUPromoteAlloca::handleAlloca(AllocaInst &I, bool SufficientLDS) {
         continue;
       }
 
-      Type *EltTy = V->getType()->getPointerElementType();
-
       // The operand's value should be corrected on its own and we don't want to
       // touch the users.
-      if (auto *ASC = dyn_cast<AddrSpaceCastInst>(V)) {
-        if (ASC->getDestAddressSpace() == AS.PRIVATE_ADDRESS) {
-          PointerType *NewTy = PointerType::get(EltTy, AS.FLAT_ADDRESS);
-          V->mutateType(NewTy);
-        }
+      if (isa<AddrSpaceCastInst>(V))
         continue;
-      }
 
-      EltTy = V->getType()->getPointerElementType();
+      Type *EltTy = V->getType()->getPointerElementType();
       PointerType *NewTy = PointerType::get(EltTy, AS.LOCAL_ADDRESS);
 
       // FIXME: It doesn't really make sense to try to do this for all

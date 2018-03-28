@@ -36,8 +36,6 @@ using namespace llvm;
 
 namespace {
 class LLVM_LIBRARY_VISIBILITY AMDGPUPrintfRuntimeBinding : public ModulePass {
-  AMDGPUAS AMDGPUASI;
-
 public:
   static char ID;
   explicit AMDGPUPrintfRuntimeBinding();
@@ -179,7 +177,7 @@ bool AMDGPUPrintfRuntimeBinding::shouldPrintAsStr(char Specifier,
   if (!PT) {
     return false;
   }
-  if (PT->getAddressSpace() != AMDGPUASI.CONSTANT_ADDRESS) {
+  if (PT->getAddressSpace() != 4) {
     return false;
   }
   Type* ElemType = PT->getContainedType(0);
@@ -696,7 +694,6 @@ StringRef AMDGPUPrintfRuntimeBinding::getPassName() const {
 }
 
 bool AMDGPUPrintfRuntimeBinding::doInitialization(Module &M) {
-  AMDGPUASI = AMDGPU::getAMDGPUAS(M);
   return false;
 }
 

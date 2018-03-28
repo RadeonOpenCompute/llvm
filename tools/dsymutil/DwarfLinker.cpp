@@ -964,8 +964,6 @@ void DwarfStreamer::emitStrings(const NonRelocatableStringpool &Pool) {
   for (auto Entry : Entries) {
     if (Entry.getIndex() == -1U)
       break;
-    Asm->OutStreamer->EmitBytes(
-        StringRef(Entry.getString().data(), Entry.getString().size() + 1));
     // Emit the string itself.
     Asm->OutStreamer->EmitBytes(Entry.getString());
     // Emit a null terminator.
