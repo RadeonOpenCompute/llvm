@@ -211,6 +211,8 @@ public:
     return getTLI()->isProfitableToHoist(I);
   }
 
+  bool useAA() const { return getST()->useAA(); }
+
   bool isTypeLegal(Type *Ty) {
     EVT VT = getTLI()->getValueType(DL, Ty);
     return getTLI()->isTypeLegal(VT);
