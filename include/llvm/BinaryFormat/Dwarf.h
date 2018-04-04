@@ -575,9 +575,6 @@ private:
   };
 };
 
-/// The Bernstein hash function used by the accelerator tables.
-uint32_t djbHash(StringRef Buffer, uint32_t H = 5381);
-
 template <typename Enum> struct EnumTraits : public std::false_type {};
 
 template <> struct EnumTraits<Attribute> : public std::true_type {
@@ -599,7 +596,6 @@ template <> struct EnumTraits<Tag> : public std::true_type {
   static constexpr char Type[4] = "TAG";
   static constexpr StringRef (*StringFn)(unsigned) = &TagString;
 };
-
 } // End of namespace dwarf
 
 /// Dwarf constants format_provider
