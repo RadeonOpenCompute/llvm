@@ -564,9 +564,6 @@ bool BasicAAResult::DecomposeGEPExpression(const Value *V,
 bool BasicAAResult::pointsToConstantMemory(const MemoryLocation &Loc,
                                            bool OrLocal) {
   assert(Visited.empty() && "Visited must be cleared after use!");
-    if (getenv("DBG_ALIAS")) {
-       llvm::errs() << *Loc.Ptr << "\n";
-    }
 
   unsigned MaxLookup = 8;
   SmallVector<const Value *, 16> Worklist;
