@@ -1069,8 +1069,8 @@ def executeScript(test, litConfig, tmpBase, commands, cwd):
         f.write('@echo off\n')
         f.write('\nif %ERRORLEVEL% NEQ 0 EXIT\n'.join(commands))
     else:
-        #if test.config.pipefail:
-        #    f.write('set -o pipefail;')
+        if test.config.pipefail:
+            f.write('set -o pipefail;')
         if litConfig.echo_all_commands:
             f.write('set -x;')
         f.write('{ ' + '; } &&\n{ '.join(commands) + '; }')
