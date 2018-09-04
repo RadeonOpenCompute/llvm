@@ -34,15 +34,21 @@ namespace {
 class SelectAcceleratorCode : public ModulePass {
     SmallPtrSet<const Function*, 8u> HCCallees_;
 
-    void findAllHCCallees_(const Function &F, Module &M)
+    void findAllHCCallees_(Function &F, Module &M)
     {
         for (auto&& BB : F) {
             for (auto&& I : BB) {
                 if (auto CI = dyn_cast<CallInst>(&I)) {
                     auto V = CI->getCalledValue()->stripPointerCasts();
                     if (auto Callee = dyn_cast<Function>(V)) {
-                        auto Tmp = HCCallees_.insert(Callee);
-                        if (Tmp.second) findAllHCCallees_(*Callee, M);
+                      Callee->addFnAttr(Attribute::Convergent);
+                      for (auto&& U : Callee->uses()) {
+                        if (auto CI = dyn_cast<CallInst>(&*U)) {
+                          CI->addAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
+                        }
+                      }
+                      auto Tmp = HCCallees_.insert(Callee);
+                      if (Tmp.second) findAllHCCallees_(*Callee, M);
                     }
                 }
             }
@@ -114,11 +120,33 @@ class SelectAcceleratorCode : public ModulePass {
             }
             F.addFnAttr(Attribute::AlwaysInline);
 
-            return false;
+            return true;
         }
 
-        return true;
+        return false;
     }
+
+  bool restoreKernelAttributes(Function &F) {
+    if (F.getCallingConv() != CallingConv::AMDGPU_KERNEL)
+      return false;
+
+    bool Modified = false;
+
+    if (!F.hasFnAttribute(Attribute::Convergent)) {
+      F.addFnAttr(Attribute::Convergent);
+      Modified |= true;
+    }
+
+    if (!F.hasFnAttribute(Attribute::OptimizeNone)) {
+      F.addFnAttr(Attribute::OptimizeNone);
+      F.addFnAttr(Attribute::NoInline);
+      F.removeFnAttr(Attribute::AlwaysInline);
+      Modified |= true;
+    }
+
+    return Modified;
+  }
+
 public:
     static char ID;
     SelectAcceleratorCode() : ModulePass{ID} {}
@@ -130,8 +158,9 @@ public:
         // invalidated appropriately by other passes.
         for (auto&& F : M.functions()) {
             if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
-                 auto Tmp = HCCallees_.insert(M.getFunction(F.getName()));
-                if (Tmp.second) findAllHCCallees_(F, M);
+              auto Tmp = HCCallees_.insert(M.getFunction(F.getName()));
+
+              if (Tmp.second) findAllHCCallees_(F, M);
             }
         }
 
@@ -143,7 +172,10 @@ public:
 
         Modified = eraseDeadAliases_(M) || Modified;
 
-        for (auto&& F : M.functions()) Modified = !alwaysInline_(F) || Modified;
+        for (auto&& F : M.functions()) {
+          Modified |= alwaysInline_(F);
+          Modified |= restoreKernelAttributes(F);
+        }
 
         return Modified;
     }
