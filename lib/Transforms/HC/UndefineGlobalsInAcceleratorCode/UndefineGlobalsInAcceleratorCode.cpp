@@ -62,7 +62,7 @@ public:
 char UndefineGlobalsInAcceleratorCode::ID = 0;
 
 static RegisterPass<UndefineGlobalsInAcceleratorCode> X{
-    "externalise-globals-in-accelerator-code",
+    "undefine-globals-in-accelerator-code",
     "Makes non-constant globals undefined with external linkage, in code "
     "expected to run on an accelerator; the undefined symbols are resolved by "
     "the HC RT, when creating a executable using the resulting code object.",
