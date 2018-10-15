@@ -291,11 +291,11 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(const Triple &T, bool Large) {
   switch (T.getArch()) {
   case Triple::mips:
   case Triple::mipsel:
-    FDECFIEncoding = dwarf::DW_EH_PE_sdata4;
-    break;
   case Triple::mips64:
   case Triple::mips64el:
-    FDECFIEncoding = dwarf::DW_EH_PE_sdata8;
+    FDECFIEncoding = Ctx->getAsmInfo()->getCodePointerSize() == 4
+                         ? dwarf::DW_EH_PE_sdata4
+                         : dwarf::DW_EH_PE_sdata8;
     break;
   case Triple::ppc64:
   case Triple::ppc64le:
@@ -468,6 +468,9 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(const Triple &T, bool Large) {
       Ctx->getELFSection(".eh_frame", EHSectionType, EHSectionFlags);
 
   StackSizesSection = Ctx->getELFSection(".stack_sizes", ELF::SHT_PROGBITS, 0);
+
+  BTFSection = Ctx->getELFSection(".BTF", ELF::SHT_PROGBITS, 0);
+  BTFExtSection = Ctx->getELFSection(".BTF.ext", ELF::SHT_PROGBITS, 0);
 }
 
 void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
