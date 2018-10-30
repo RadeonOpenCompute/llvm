@@ -71,9 +71,15 @@ def SKLPortAny : ProcResGroup<[SKLPort0, SKLPort1, SKLPort2, SKLPort3, SKLPort4,
   let BufferSize=60;
 }
 
-// Loads are 5 cycles, so ReadAfterLd registers needn't be available until 5
+// Integer loads are 5 cycles, so ReadAfterLd registers needn't be available until 5
 // cycles after the memory operand.
 def : ReadAdvance<ReadAfterLd, 5>;
+
+// Vector loads are 5/6/7 cycles, so ReadAfterVec*Ld registers needn't be available
+// until 5/6/7 cycles after the memory operand.
+def : ReadAdvance<ReadAfterVecLd, 5>;
+def : ReadAdvance<ReadAfterVecXLd, 6>;
+def : ReadAdvance<ReadAfterVecYLd, 7>;
 
 // Many SchedWrites are defined in pairs with and without a folded load.
 // Instructions with folded loads are usually micro-fused, so they only appear
@@ -1127,7 +1133,8 @@ def SKLWriteResGroup91 : SchedWriteRes<[SKLPort23,SKLPort015]> {
 def: InstRW<[SKLWriteResGroup91], (instrs VINSERTF128rm,
                                           VINSERTI128rm,
                                           VPBLENDDrmi)>;
-def: InstRW<[SKLWriteResGroup91], (instregex "(V?)PADD(B|D|Q|W)rm",
+def: InstRW<[SKLWriteResGroup91, ReadAfterVecXLd],
+                                  (instregex "(V?)PADD(B|D|Q|W)rm",
                                              "(V?)PSUB(B|D|Q|W)rm")>;
 
 def SKLWriteResGroup92 : SchedWriteRes<[SKLPort5,SKLPort23]> {
@@ -1224,7 +1231,8 @@ def SKLWriteResGroup110 : SchedWriteRes<[SKLPort23,SKLPort015]> {
   let ResourceCycles = [1,1];
 }
 def: InstRW<[SKLWriteResGroup110], (instrs VPBLENDDYrmi)>;
-def: InstRW<[SKLWriteResGroup110], (instregex "VPADD(B|D|Q|W)Yrm",
+def: InstRW<[SKLWriteResGroup110, ReadAfterVecYLd],
+                                   (instregex "VPADD(B|D|Q|W)Yrm",
                                               "VPSUB(B|D|Q|W)Yrm")>;
 
 def SKLWriteResGroup112 : SchedWriteRes<[SKLPort0,SKLPort5,SKLPort23]> {

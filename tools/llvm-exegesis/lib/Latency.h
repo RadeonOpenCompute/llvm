@@ -26,14 +26,8 @@ public:
   LatencySnippetGenerator(const LLVMState &State) : SnippetGenerator(State) {}
   ~LatencySnippetGenerator() override;
 
-  llvm::Expected<CodeTemplate>
-  generateCodeTemplate(unsigned Opcode) const override;
-
-private:
-  llvm::Error isInfeasible(const llvm::MCInstrDesc &MCInstrDesc) const;
-
-  llvm::Expected<CodeTemplate>
-  generateTwoInstructionPrototype(const Instruction &Instr) const;
+  llvm::Expected<std::vector<CodeTemplate>>
+  generateCodeTemplates(const Instruction &Instr) const override;
 };
 
 class LatencyBenchmarkRunner : public BenchmarkRunner {
@@ -43,9 +37,8 @@ public:
   ~LatencyBenchmarkRunner() override;
 
 private:
-  std::vector<BenchmarkMeasure>
-  runMeasurements(const ExecutableFunction &EF,
-                  ScratchSpace &Scratch) const override;
+  llvm::Expected<std::vector<BenchmarkMeasure>>
+  runMeasurements(const FunctionExecutor &Executor) const override;
 
   virtual const char *getCounterName() const;
 };

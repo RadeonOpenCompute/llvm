@@ -123,6 +123,14 @@ AMDGPUTargetStreamer* AMDGPUAsmPrinter::getTargetStreamer() const {
 }
 
 void AMDGPUAsmPrinter::EmitStartOfAsmFile(Module &M) {
+  if (IsaInfo::hasCodeObjectV3(getSTI())) {
+    std::string ExpectedTarget;
+    raw_string_ostream ExpectedTargetOS(ExpectedTarget);
+    IsaInfo::streamIsaVersion(getSTI(), ExpectedTargetOS);
+
+    getTargetStreamer()->EmitDirectiveAMDGCNTarget(ExpectedTarget);
+  }
+
   if (TM.getTargetTriple().getOS() != Triple::AMDHSA &&
       TM.getTargetTriple().getOS() != Triple::AMDPAL)
     return;
@@ -132,6 +140,9 @@ void AMDGPUAsmPrinter::EmitStartOfAsmFile(Module &M) {
 
   if (TM.getTargetTriple().getOS() == Triple::AMDPAL)
     readPALMetadata(M);
+
+  if (IsaInfo::hasCodeObjectV3(getSTI()))
+    return;
 
   // HSA emits NT_AMDGPU_HSA_CODE_OBJECT_VERSION for code objects v2.
   if (TM.getTargetTriple().getOS() == Triple::AMDHSA)
@@ -200,7 +211,7 @@ void AMDGPUAsmPrinter::EmitFunctionBodyStart() {
 
   const GCNSubtarget &STM = MF->getSubtarget<GCNSubtarget>();
   const Function &F = MF->getFunction();
-  if (STM.isAmdCodeObjectV2(F) &&
+  if (!STM.hasCodeObjectV3() && STM.isAmdHsaOrMesa(F) &&
       (F.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
        F.getCallingConv() == CallingConv::SPIR_KERNEL)) {
     amd_kernel_code_t KernelCode;
@@ -208,10 +219,8 @@ void AMDGPUAsmPrinter::EmitFunctionBodyStart() {
     getTargetStreamer()->EmitAMDKernelCodeT(KernelCode);
   }
 
-  if (TM.getTargetTriple().getOS() != Triple::AMDHSA)
-    return;
-
-  HSAMetadataStream->emitKernel(*MF, CurrentProgramInfo);
+  if (STM.isAmdHsaOS())
+    HSAMetadataStream->emitKernel(*MF, CurrentProgramInfo);
 }
 
 void AMDGPUAsmPrinter::EmitFunctionBodyEnd() {
@@ -260,7 +269,7 @@ void AMDGPUAsmPrinter::EmitFunctionEntryLabel() {
 
   const SIMachineFunctionInfo *MFI = MF->getInfo<SIMachineFunctionInfo>();
   const GCNSubtarget &STM = MF->getSubtarget<GCNSubtarget>();
-  if (MFI->isEntryFunction() && STM.isAmdCodeObjectV2(MF->getFunction())) {
+  if (MFI->isEntryFunction() && STM.isAmdHsaOrMesa(MF->getFunction())) {
     SmallString<128> SymbolName;
     getNameWithPrefix(SymbolName, &MF->getFunction()),
     getTargetStreamer()->EmitAMDGPUSymbolType(

@@ -2052,9 +2052,22 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
           areMatchingArrayAndVecTypes(GEPEltType, SrcEltType)) ||
          (GEPEltType->isVectorTy() && SrcEltType->isArrayTy() &&
           areMatchingArrayAndVecTypes(SrcEltType, GEPEltType)))) {
-      GEP.setOperand(0, SrcOp);
-      GEP.setSourceElementType(SrcEltType);
-      return &GEP;
+
+      // Create a new GEP here, as using `setOperand()` followed by
+      // `setSourceElementType()` won't actually update the type of the
+      // existing GEP Value. Causing issues if this Value is accessed when
+      // constructing an AddrSpaceCastInst
+      Value *NGEP =
+          GEP.isInBounds()
+              ? Builder.CreateInBoundsGEP(nullptr, SrcOp, {Ops[1], Ops[2]})
+              : Builder.CreateGEP(nullptr, SrcOp, {Ops[1], Ops[2]});
+      NGEP->takeName(&GEP);
+
+      // Preserve GEP address space to satisfy users
+      if (NGEP->getType()->getPointerAddressSpace() != GEP.getAddressSpace())
+        return new AddrSpaceCastInst(NGEP, GEPType);
+
+      return replaceInstUsesWith(GEP, NGEP);
     }
 
     // See if we can simplify:
@@ -2334,7 +2347,7 @@ tryToMoveFreeBeforeNullTest(CallInst &FI) {
     return nullptr;
 
   // Validate the rest of constraint #1 by matching on the pred branch.
-  TerminatorInst *TI = PredBB->getTerminator();
+  Instruction *TI = PredBB->getTerminator();
   BasicBlock *TrueBB, *FalseBB;
   ICmpInst::Predicate Pred;
   if (!match(TI, m_Br(m_ICmp(Pred, m_Specific(Op), m_Zero()), TrueBB, FalseBB)))
@@ -3272,7 +3285,7 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
 
     // Recursively visit successors.  If this is a branch or switch on a
     // constant, only visit the reachable successor.
-    TerminatorInst *TI = BB->getTerminator();
+    Instruction *TI = BB->getTerminator();
     if (BranchInst *BI = dyn_cast<BranchInst>(TI)) {
       if (BI->isConditional() && isa<ConstantInt>(BI->getCondition())) {
         bool CondVal = cast<ConstantInt>(BI->getCondition())->getZExtValue();

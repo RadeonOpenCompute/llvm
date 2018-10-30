@@ -145,6 +145,30 @@
     # CHECK: i64x2.neg # encoding: [0xfd,0x27]
     i64x2.neg
 
+    # CHECK: i8x16.add_saturate_s # encoding: [0xfd,0x28]
+    i8x16.add_saturate_s
+
+    # CHECK: i8x16.add_saturate_u # encoding: [0xfd,0x29]
+    i8x16.add_saturate_u
+
+    # CHECK: i16x8.add_saturate_s # encoding: [0xfd,0x2a]
+    i16x8.add_saturate_s
+
+    # CHECK: i16x8.add_saturate_u # encoding: [0xfd,0x2b]
+    i16x8.add_saturate_u
+
+    # CHECK: i8x16.sub_saturate_s # encoding: [0xfd,0x2c]
+    i8x16.sub_saturate_s
+
+    # CHECK: i8x16.sub_saturate_u # encoding: [0xfd,0x2d]
+    i8x16.sub_saturate_u
+
+    # CHECK: i16x8.sub_saturate_s # encoding: [0xfd,0x2e]
+    i16x8.sub_saturate_s
+
+    # CHECK: i16x8.sub_saturate_u # encoding: [0xfd,0x2f]
+    i16x8.sub_saturate_u
+
     # CHECK: i8x16.shl # encoding: [0xfd,0x30]
     i8x16.shl
 
@@ -357,6 +381,18 @@
 
     # CHECK: f64x2.abs # encoding: [0xfd,0x80]
     f64x2.abs
+
+    # CHECK: f32x4.min # encoding: [0xfd,0x81]
+    f32x4.min
+
+    # CHECK: f64x2.min # encoding: [0xfd,0x82]
+    f64x2.min
+
+    # CHECK: f32x4.max # encoding: [0xfd,0x83]
+    f32x4.max
+
+    # CHECK: f64x2.max # encoding: [0xfd,0x84]
+    f64x2.max
 
     # CHECK: f32x4.add # encoding: [0xfd,0x85]
     f32x4.add

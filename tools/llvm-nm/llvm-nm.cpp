@@ -183,6 +183,8 @@ cl::opt<bool> DyldInfoOnly("dyldinfo-only",
 cl::opt<bool> NoLLVMBitcode("no-llvm-bc",
                             cl::desc("Disable LLVM bitcode reader"));
 
+cl::extrahelp HelpResponse("\nPass @FILE as argument to read options from FILE.\n");
+
 bool PrintAddress = true;
 
 bool MultipleFiles = false;
@@ -757,22 +759,22 @@ static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
     }
   }
 
-  auto writeFileName = [&]() {
+  auto writeFileName = [&](raw_ostream &S) {
     if (!ArchitectureName.empty())
-      outs() << "(for architecture " << ArchitectureName << "):";
+      S << "(for architecture " << ArchitectureName << "):";
     if (OutputFormat == posix && !ArchiveName.empty())
-      outs() << ArchiveName << "[" << CurrentFilename << "]: ";
+      S << ArchiveName << "[" << CurrentFilename << "]: ";
     else {
       if (!ArchiveName.empty())
-        outs() << ArchiveName << ":";
-      outs() << CurrentFilename << ": ";
+        S << ArchiveName << ":";
+      S << CurrentFilename << ": ";
     }
   };
 
   if (SymbolList.empty()) {
     if (PrintFileName)
-      writeFileName();
-    outs() << "no symbols\n";
+      writeFileName(errs());
+    errs() << "no symbols\n";
   }
 
   for (SymbolListT::iterator I = SymbolList.begin(), E = SymbolList.end();
@@ -797,7 +799,7 @@ static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
         (Weak && NoWeakSymbols))
       continue;
     if (PrintFileName)
-      writeFileName();
+      writeFileName(outs());
     if ((JustSymbolName ||
          (UndefinedOnly && MachO && OutputFormat != darwin)) &&
         OutputFormat != posix) {
@@ -1753,12 +1755,14 @@ static void dumpSymbolNamesFromFile(std::string &Filename) {
         outs() << "Archive map\n";
         for (; I != E; ++I) {
           Expected<Archive::Child> C = I->getMember();
-          if (!C)
+          if (!C) {
             error(C.takeError(), Filename);
+            break;
+          }
           Expected<StringRef> FileNameOrErr = C->getName();
           if (!FileNameOrErr) {
             error(FileNameOrErr.takeError(), Filename);
-            return;
+            break;
           }
           StringRef SymName = I->getName();
           outs() << SymName << " in " << FileNameOrErr.get() << "\n";

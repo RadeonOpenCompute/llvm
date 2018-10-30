@@ -129,7 +129,7 @@ class VectorLegalizer {
   SDValue ExpandFSUB(SDValue Op);
   SDValue ExpandBITREVERSE(SDValue Op);
   SDValue ExpandCTLZ(SDValue Op);
-  SDValue ExpandCTTZ_ZERO_UNDEF(SDValue Op);
+  SDValue ExpandCTTZ(SDValue Op);
   SDValue ExpandStrictFPOp(SDValue Op);
 
   /// Implements vector promotion.
@@ -226,7 +226,6 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   SDValue Result = SDValue(DAG.UpdateNodeOperands(Op.getNode(), Ops),
                            Op.getResNo());
 
-  bool HasVectorValue = false;
   if (Op.getOpcode() == ISD::LOAD) {
     LoadSDNode *LD = cast<LoadSDNode>(Op.getNode());
     ISD::LoadExtType ExtType = LD->getExtensionType();
@@ -240,17 +239,9 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
         return TranslateLegalizeResults(Op, Result);
       case TargetLowering::Custom:
         if (SDValue Lowered = TLI.LowerOperation(Result, DAG)) {
-          if (Lowered == Result)
-            return TranslateLegalizeResults(Op, Lowered);
-          Changed = true;
-          if (Lowered->getNumValues() != Op->getNumValues()) {
-            // This expanded to something other than the load. Assume the
-            // lowering code took care of any chain values, and just handle the
-            // returned value.
-            assert(Result.getValue(1).use_empty() &&
-                   "There are still live users of the old chain!");
-            return LegalizeOp(Lowered);
-          }
+          assert(Lowered->getNumValues() == Op->getNumValues() &&
+                 "Unexpected number of results");
+          Changed = Lowered != Result;
           return TranslateLegalizeResults(Op, Lowered);
         }
         LLVM_FALLTHROUGH;
@@ -280,9 +271,9 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
         return LegalizeOp(ExpandStore(Op));
       }
     }
-  } else if (Op.getOpcode() == ISD::MSCATTER || Op.getOpcode() == ISD::MSTORE)
-    HasVectorValue = true;
+  }
 
+  bool HasVectorValue = false;
   for (SDNode::value_iterator J = Node->value_begin(), E = Node->value_end();
        J != E;
        ++J)
@@ -395,6 +386,7 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::SMUL_LOHI:
   case ISD::UMUL_LOHI:
   case ISD::FCANONICALIZE:
+  case ISD::SADDSAT:
     Action = TLI.getOperationAction(Node->getOpcode(), Node->getValueType(0));
     break;
   case ISD::FP_ROUND_INREG:
@@ -405,14 +397,6 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::UINT_TO_FP:
     Action = TLI.getOperationAction(Node->getOpcode(),
                                     Node->getOperand(0).getValueType());
-    break;
-  case ISD::MSCATTER:
-    Action = TLI.getOperationAction(Node->getOpcode(),
-               cast<MaskedScatterSDNode>(Node)->getValue().getValueType());
-    break;
-  case ISD::MSTORE:
-    Action = TLI.getOperationAction(Node->getOpcode(),
-               cast<MaskedStoreSDNode>(Node)->getValue().getValueType());
     break;
   }
 
@@ -734,8 +718,9 @@ SDValue VectorLegalizer::Expand(SDValue Op) {
   case ISD::CTLZ:
   case ISD::CTLZ_ZERO_UNDEF:
     return ExpandCTLZ(Op);
+  case ISD::CTTZ:
   case ISD::CTTZ_ZERO_UNDEF:
-    return ExpandCTTZ_ZERO_UNDEF(Op);
+    return ExpandCTTZ(Op);
   case ISD::STRICT_FADD:
   case ISD::STRICT_FSUB:
   case ISD::STRICT_FMUL:
@@ -1096,46 +1081,40 @@ SDValue VectorLegalizer::ExpandCTLZ(SDValue Op) {
   if (Op.getOpcode() == ISD::CTLZ_ZERO_UNDEF &&
       TLI.isOperationLegalOrCustom(ISD::CTLZ, VT)) {
     SDLoc DL(Op);
-    return DAG.getNode(ISD::CTLZ, DL, Op.getValueType(), Op.getOperand(0));
+    return DAG.getNode(ISD::CTLZ, DL, VT, Op.getOperand(0));
   }
 
-  // If CTPOP is available we can lower with a CTPOP based method:
-  // u16 ctlz(u16 x) {
-  //   x |= (x >> 1);
-  //   x |= (x >> 2);
-  //   x |= (x >> 4);
-  //   x |= (x >> 8);
-  //   return ctpop(~x);
-  // }
-  // Ref: "Hacker's Delight" by Henry Warren
+  // If we have the appropriate vector bit operations, it is better to use them
+  // than unrolling and expanding each component.
   if (isPowerOf2_32(NumBitsPerElt) &&
       TLI.isOperationLegalOrCustom(ISD::CTPOP, VT) &&
       TLI.isOperationLegalOrCustom(ISD::SRL, VT) &&
-      TLI.isOperationLegalOrCustomOrPromote(ISD::OR, VT) &&
-      TLI.isOperationLegalOrCustomOrPromote(ISD::XOR, VT)) {
-    SDLoc DL(Op);
-    SDValue Res = Op.getOperand(0);
-    EVT ShiftTy = TLI.getShiftAmountTy(VT, DAG.getDataLayout());
-
-    for (unsigned i = 1; i != NumBitsPerElt; i *= 2)
-      Res = DAG.getNode(
-          ISD::OR, DL, VT, Res,
-          DAG.getNode(ISD::SRL, DL, VT, Res, DAG.getConstant(i, DL, ShiftTy)));
-
-    Res = DAG.getNOT(DL, Res, VT);
-    return DAG.getNode(ISD::CTPOP, DL, VT, Res);
-  }
+      TLI.isOperationLegalOrCustomOrPromote(ISD::OR, VT))
+    return Op;
 
   // Otherwise go ahead and unroll.
   return DAG.UnrollVectorOp(Op.getNode());
 }
 
-SDValue VectorLegalizer::ExpandCTTZ_ZERO_UNDEF(SDValue Op) {
+SDValue VectorLegalizer::ExpandCTTZ(SDValue Op) {
+  EVT VT = Op.getValueType();
+  unsigned NumBitsPerElt = VT.getScalarSizeInBits();
+
   // If the non-ZERO_UNDEF version is supported we can use that instead.
-  if (TLI.isOperationLegalOrCustom(ISD::CTTZ, Op.getValueType())) {
+  if (TLI.isOperationLegalOrCustom(ISD::CTTZ, VT)) {
     SDLoc DL(Op);
-    return DAG.getNode(ISD::CTTZ, DL, Op.getValueType(), Op.getOperand(0));
+    return DAG.getNode(ISD::CTTZ, DL, VT, Op.getOperand(0));
   }
+
+  // If we have the appropriate vector bit operations, it is better to use them
+  // than unrolling and expanding each component.
+  if (isPowerOf2_32(NumBitsPerElt) &&
+      (TLI.isOperationLegalOrCustom(ISD::CTPOP, VT) ||
+       TLI.isOperationLegalOrCustom(ISD::CTLZ, VT)) &&
+      TLI.isOperationLegalOrCustom(ISD::SUB, VT) &&
+      TLI.isOperationLegalOrCustomOrPromote(ISD::AND, VT) &&
+      TLI.isOperationLegalOrCustomOrPromote(ISD::XOR, VT))
+    return Op;
 
   // Otherwise go ahead and unroll.
   return DAG.UnrollVectorOp(Op.getNode());
@@ -1185,7 +1164,7 @@ SDValue VectorLegalizer::ExpandStrictFPOp(SDValue Op) {
   AddLegalizedOperand(Op.getValue(0), Result);
   AddLegalizedOperand(Op.getValue(1), NewChain);
 
-  return NewChain;
+  return Op.getResNo() ? NewChain : Result;
 }
 
 SDValue VectorLegalizer::UnrollVSETCC(SDValue Op) {
