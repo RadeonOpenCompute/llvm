@@ -3,6 +3,8 @@
 
 ; ALL-ASM-LABEL: {{^}}fadd:
 
+; OSABI-AMDHSA-ASM-NOT: .hsa_code_object_version
+; OSABI-AMDHSA-ASM-NOT: .hsa_code_object_isa
 ; OSABI-AMDHSA-ASM-NOT: .amdgpu_hsa_kernel
 ; OSABI-AMDHSA-ASM-NOT: .amd_kernel_code_t
 
@@ -40,6 +42,7 @@
 ; OSABI-AMDHSA-ASM-NOT: .hsa_code_object_version
 ; OSABI-AMDHSA-ASM-NOT: .hsa_code_object_isa
 ; OSABI-AMDHSA-ASM-NOT: .amd_amdgpu_isa
+; OSABI-AMDHSA-ASM-NOT: .amd_amdgpu_hsa_metadata
 ; OSABI-AMDHSA-ASM-NOT: .amd_amdgpu_pal_metadata
 
 ; OSABI-AMDHSA-ELF: Section Headers
@@ -55,6 +58,9 @@
 ; OSABI-AMDHSA-ELF: {{[0-9]+}}: 0000000000000100 {{[0-9]+}} FUNC   LOCAL  DEFAULT {{[0-9]+}} fsub
 ; OSABI-AMDHSA-ELF: {{[0-9]+}}: 0000000000000000 64         OBJECT GLOBAL DEFAULT {{[0-9]+}} fadd.kd
 ; OSABI-AMDHSA-ELF: {{[0-9]+}}: 0000000000000040 64         OBJECT GLOBAL DEFAULT {{[0-9]+}} fsub.kd
+
+; OSABI-AMDHSA-ELF: Displaying notes found at file offset
+; OSABI-AMDHSA-ELF: AMDGPU 0x{{[0-9a-f]+}} NT_AMDGPU_METADATA (AMDGPU Metadata)
 
 define amdgpu_kernel void @fadd(
     float addrspace(1)* %r,

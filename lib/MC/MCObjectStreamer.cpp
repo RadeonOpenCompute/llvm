@@ -14,7 +14,6 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCCodeView.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCBTFContext.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectWriter.h"
@@ -22,7 +21,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SourceMgr.h"
-#include "MCDwarf2BTF.h"
 using namespace llvm;
 
 MCObjectStreamer::MCObjectStreamer(MCContext &Context,
@@ -59,6 +57,27 @@ void MCObjectStreamer::flushPendingLabels(MCFragment *F, uint64_t FOffset) {
     Sym->setOffset(FOffset);
   }
   PendingLabels.clear();
+}
+
+// When fixup's offset is a forward declared label, e.g.:
+//
+//   .reloc 1f, R_MIPS_JALR, foo
+// 1: nop
+//
+// postpone adding it to Fixups vector until the label is defined and its offset
+// is known.
+void MCObjectStreamer::resolvePendingFixups() {
+  for (PendingMCFixup &PendingFixup : PendingFixups) {
+    if (!PendingFixup.Sym || PendingFixup.Sym->isUndefined ()) {
+      getContext().reportError(PendingFixup.Fixup.getLoc(),
+                               "unresolved relocation offset");
+      continue;
+    }
+    flushPendingLabels(PendingFixup.DF, PendingFixup.DF->getContents().size());
+    PendingFixup.Fixup.setOffset(PendingFixup.Sym->getOffset());
+    PendingFixup.DF->getFixups().push_back(PendingFixup.Fixup);
+  }
+  PendingFixups.clear();
 }
 
 // As a compile-time optimization, avoid allocating and evaluating an MCExpr
@@ -441,31 +460,6 @@ void MCObjectStreamer::EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
   insert(new MCDwarfCallFrameFragment(*AddrDelta));
 }
 
-void MCObjectStreamer::EmitBTFAdvanceLineAddr(const MCSymbol *Label,
-                                              unsigned Size) {
-  const MCExpr *Value = MCSymbolRefExpr::create(Label, getContext());
-  MCDataFragment *DF = getOrCreateDataFragment();
-
-  // Avoid fixups when possible.
-  int64_t AbsValue;
-  SMLoc Loc;
-
-  if (Value->evaluateAsAbsolute(AbsValue, getAssemblerPtr())) {
-    if (!isUIntN(8 * Size, AbsValue) && !isIntN(8 * Size, AbsValue)) {
-      getContext().reportError(
-          Loc, "value evaluated as " + Twine(AbsValue) + " is out of range.");
-      return;
-    }
-    EmitIntValue(AbsValue, Size);
-    return;
-  }
-
-  DF->getFixups().push_back(
-      MCFixup::create(DF->getContents().size(), Value,
-                      MCFixup::getKindForSize(Size, false), Loc));
-  DF->getContents().resize(DF->getContents().size() + Size, 0);
-}
-
 void MCObjectStreamer::EmitCVLocDirective(unsigned FunctionId, unsigned FileNo,
                                           unsigned Line, unsigned Column,
                                           bool PrologueEnd, bool IsStmt,
@@ -503,7 +497,11 @@ void MCObjectStreamer::EmitCVInlineLinetableDirective(
 void MCObjectStreamer::EmitCVDefRangeDirective(
     ArrayRef<std::pair<const MCSymbol *, const MCSymbol *>> Ranges,
     StringRef FixedSizePortion) {
-  getContext().getCVContext().emitDefRange(*this, Ranges, FixedSizePortion);
+  MCFragment *Frag =
+      getContext().getCVContext().emitDefRange(*this, Ranges, FixedSizePortion);
+  // Attach labels that were pending before we created the defrange fragment to
+  // the beginning of the new fragment.
+  flushPendingLabels(Frag, 0);
   this->MCStreamer::EmitCVDefRangeDirective(Ranges, FixedSizePortion);
 }
 
@@ -630,16 +628,6 @@ void MCObjectStreamer::EmitGPRel64Value(const MCExpr *Value) {
 bool MCObjectStreamer::EmitRelocDirective(const MCExpr &Offset, StringRef Name,
                                           const MCExpr *Expr, SMLoc Loc,
                                           const MCSubtargetInfo &STI) {
-  int64_t OffsetValue;
-  if (!Offset.evaluateAsAbsolute(OffsetValue))
-    llvm_unreachable("Offset is not absolute");
-
-  if (OffsetValue < 0)
-    llvm_unreachable("Offset is negative");
-
-  MCDataFragment *DF = getOrCreateDataFragment(&STI);
-  flushPendingLabels(DF, DF->getContents().size());
-
   Optional<MCFixupKind> MaybeKind = Assembler->getBackend().getFixupKind(Name);
   if (!MaybeKind.hasValue())
     return true;
@@ -649,7 +637,30 @@ bool MCObjectStreamer::EmitRelocDirective(const MCExpr &Offset, StringRef Name,
   if (Expr == nullptr)
     Expr =
         MCSymbolRefExpr::create(getContext().createTempSymbol(), getContext());
-  DF->getFixups().push_back(MCFixup::create(OffsetValue, Expr, Kind, Loc));
+
+  MCDataFragment *DF = getOrCreateDataFragment(&STI);
+  flushPendingLabels(DF, DF->getContents().size());
+
+  int64_t OffsetValue;
+  if (Offset.evaluateAsAbsolute(OffsetValue)) {
+    if (OffsetValue < 0)
+      llvm_unreachable(".reloc offset is negative");
+    DF->getFixups().push_back(MCFixup::create(OffsetValue, Expr, Kind, Loc));
+    return false;
+  }
+
+  if (Offset.getKind() != llvm::MCExpr::SymbolRef)
+    llvm_unreachable(".reloc offset is not absolute nor a label");
+
+  const MCSymbolRefExpr &SRE = cast<MCSymbolRefExpr>(Offset);
+  if (SRE.getSymbol().isDefined()) {
+    DF->getFixups().push_back(MCFixup::create(SRE.getSymbol().getOffset(),
+                                              Expr, Kind, Loc));
+    return false;
+  }
+
+  PendingFixups.emplace_back(&SRE.getSymbol(), DF,
+                                         MCFixup::create(-1, Expr, Kind, Loc));
   return false;
 }
 
@@ -715,13 +726,7 @@ void MCObjectStreamer::FinishImpl() {
   // Dump out the dwarf file & directory tables and line tables.
   MCDwarfLineTable::Emit(this, getAssembler().getDWARFLinetableParams());
 
-  auto &BTFCtx = getContext().getBTFContext();
-  if (BTFCtx) {
-    MCDwarf2BTF::addDwarfLineInfo(this);
-    BTFCtx->emitAll(this);
-    BTFCtx.reset();
-  }
-
   flushPendingLabels();
+  resolvePendingFixups();
   getAssembler().Finish();
 }

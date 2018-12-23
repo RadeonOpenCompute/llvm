@@ -170,12 +170,11 @@ define <8 x i8> @test12a(<8 x i8> %t6, <8 x i8> %t2) {
   ret <8 x i8> %t3
 }
 
-; TODO: The mask length of the 1st shuffle can be reduced to eliminate the 2nd shuffle.
+; The mask length of the 1st shuffle can be reduced to eliminate the 2nd shuffle.
 
 define <2 x i8> @extract_subvector_of_shuffle(<2 x i8> %x, <2 x i8> %y) {
 ; CHECK-LABEL: @extract_subvector_of_shuffle(
-; CHECK-NEXT:    [[SHUF:%.*]] = shufflevector <2 x i8> [[X:%.*]], <2 x i8> [[Y:%.*]], <3 x i32> <i32 0, i32 2, i32 undef>
-; CHECK-NEXT:    [[EXTRACT_SUBV:%.*]] = shufflevector <3 x i8> [[SHUF]], <3 x i8> undef, <2 x i32> <i32 0, i32 1>
+; CHECK-NEXT:    [[EXTRACT_SUBV:%.*]] = shufflevector <2 x i8> [[X:%.*]], <2 x i8> [[Y:%.*]], <2 x i32> <i32 0, i32 2>
 ; CHECK-NEXT:    ret <2 x i8> [[EXTRACT_SUBV]]
 ;
   %shuf = shufflevector <2 x i8> %x, <2 x i8> %y, <3 x i32> <i32 0, i32 2, i32 0>
@@ -183,7 +182,6 @@ define <2 x i8> @extract_subvector_of_shuffle(<2 x i8> %x, <2 x i8> %y) {
   ret <2 x i8> %extract_subv
 }
 
-; TODO:
 ; Extra uses are ok.
 ; Undef elements in either mask are ok. Undefs from the 2nd shuffle mask should propagate to the new shuffle.
 ; The type of the inputs does not have to match the output type.
@@ -194,7 +192,7 @@ define <4 x i8> @extract_subvector_of_shuffle_extra_use(<2 x i8> %x, <2 x i8> %y
 ; CHECK-LABEL: @extract_subvector_of_shuffle_extra_use(
 ; CHECK-NEXT:    [[SHUF:%.*]] = shufflevector <2 x i8> [[X:%.*]], <2 x i8> [[Y:%.*]], <5 x i32> <i32 undef, i32 2, i32 0, i32 1, i32 0>
 ; CHECK-NEXT:    call void @use_v5i8(<5 x i8> [[SHUF]])
-; CHECK-NEXT:    [[EXTRACT_SUBV:%.*]] = shufflevector <5 x i8> [[SHUF]], <5 x i8> undef, <4 x i32> <i32 0, i32 1, i32 2, i32 undef>
+; CHECK-NEXT:    [[EXTRACT_SUBV:%.*]] = shufflevector <2 x i8> [[X]], <2 x i8> [[Y]], <4 x i32> <i32 undef, i32 2, i32 0, i32 undef>
 ; CHECK-NEXT:    ret <4 x i8> [[EXTRACT_SUBV]]
 ;
   %shuf = shufflevector <2 x i8> %x, <2 x i8> %y, <5 x i32> <i32 undef, i32 2, i32 0, i32 1, i32 0>
@@ -267,8 +265,8 @@ define <3 x i8> @fold_inselts_with_widening_shuffle(i8 %x, i8 %y) {
 
 define <2 x i8> @test13b(i8 %x) {
 ; CHECK-LABEL: @test13b(
-; CHECK-NEXT:    [[TMP1:%.*]] = insertelement <2 x i8> undef, i8 [[X:%.*]], i32 1
-; CHECK-NEXT:    ret <2 x i8> [[TMP1]]
+; CHECK-NEXT:    [[B:%.*]] = insertelement <2 x i8> undef, i8 [[X:%.*]], i32 1
+; CHECK-NEXT:    ret <2 x i8> [[B]]
 ;
   %A = insertelement <2 x i8> undef, i8 %x, i32 0
   %B = shufflevector <2 x i8> %A, <2 x i8> undef, <2 x i32> <i32 undef, i32 0>
@@ -605,6 +603,62 @@ define <4 x i8> @widening_shuffle_add_invalid_mask(<2 x i8> %x) {
   %widex = shufflevector <2 x i8> %x, <2 x i8> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 0>
   %r = add <4 x i8> %widex, <i8 42, i8 43, i8 44, i8 45>
   ret <4 x i8> %r
+}
+
+; A binop that produces undef in the high lanes can be moved before the shuffle.
+; This is ok because 'shl C, undef --> undef'.
+
+define <4 x i16> @widening_shuffle_shl_constant_op0(<2 x i16> %v) {
+; CHECK-LABEL: @widening_shuffle_shl_constant_op0(
+; CHECK-NEXT:    [[TMP1:%.*]] = shl <2 x i16> <i16 42, i16 -42>, [[V:%.*]]
+; CHECK-NEXT:    [[BO:%.*]] = shufflevector <2 x i16> [[TMP1]], <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+; CHECK-NEXT:    ret <4 x i16> [[BO]]
+;
+  %shuf = shufflevector <2 x i16> %v, <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %bo = shl <4 x i16> <i16 42, i16 -42, i16 -1, i16 -1>, %shuf
+  ret <4 x i16> %bo
+}
+
+; A binop that produces undef in the high lanes can be moved before the shuffle.
+; This is ok because 'shl undef, 0 --> undef'.
+
+define <4 x i16> @widening_shuffle_shl_constant_op1(<2 x i16> %v) {
+; CHECK-LABEL: @widening_shuffle_shl_constant_op1(
+; CHECK-NEXT:    [[TMP1:%.*]] = shl <2 x i16> [[V:%.*]], <i16 2, i16 4>
+; CHECK-NEXT:    [[BO:%.*]] = shufflevector <2 x i16> [[TMP1]], <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+; CHECK-NEXT:    ret <4 x i16> [[BO]]
+;
+  %shuf = shufflevector <2 x i16> %v, <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %bo = shl <4 x i16> %shuf, <i16 2, i16 4, i16 0, i16 0>
+  ret <4 x i16> %bo
+}
+
+; A binop that does not produce undef in the high lanes can not be moved before the shuffle.
+; This is not ok because 'shl undef, 1 (or 2)' --> 0' but moving the shuffle results in undef instead.
+
+define <4 x i16> @widening_shuffle_shl_constant_op1_non0(<2 x i16> %v) {
+; CHECK-LABEL: @widening_shuffle_shl_constant_op1_non0(
+; CHECK-NEXT:    [[SHUF:%.*]] = shufflevector <2 x i16> [[V:%.*]], <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+; CHECK-NEXT:    [[BO:%.*]] = shl <4 x i16> [[SHUF]], <i16 2, i16 4, i16 1, i16 2>
+; CHECK-NEXT:    ret <4 x i16> [[BO]]
+;
+  %shuf = shufflevector <2 x i16> %v, <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %bo = shl <4 x i16> %shuf, <i16 2, i16 4, i16 1, i16 2>
+  ret <4 x i16> %bo
+}
+
+; A binop that does not produce undef in the high lanes can not be moved before the shuffle.
+; This is not ok because 'or -1, undef --> -1' but moving the shuffle results in undef instead.
+
+define <4 x i16> @widening_shuffle_or(<2 x i16> %v) {
+; CHECK-LABEL: @widening_shuffle_or(
+; CHECK-NEXT:    [[SHUF:%.*]] = shufflevector <2 x i16> [[V:%.*]], <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+; CHECK-NEXT:    [[BO:%.*]] = or <4 x i16> [[SHUF]], <i16 42, i16 -42, i16 -1, i16 -1>
+; CHECK-NEXT:    ret <4 x i16> [[BO]]
+;
+  %shuf = shufflevector <2 x i16> %v, <2 x i16> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %bo = or <4 x i16> %shuf, <i16 42, i16 -42, i16 -1, i16 -1>
+  ret <4 x i16> %bo
 }
 
 define <4 x i32> @shuffle_17add2(<4 x i32> %v) {

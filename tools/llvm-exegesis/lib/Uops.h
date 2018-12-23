@@ -18,6 +18,7 @@
 #include "BenchmarkRunner.h"
 #include "SnippetGenerator.h"
 
+namespace llvm {
 namespace exegesis {
 
 class UopsSnippetGenerator : public SnippetGenerator {
@@ -25,8 +26,8 @@ public:
   UopsSnippetGenerator(const LLVMState &State) : SnippetGenerator(State) {}
   ~UopsSnippetGenerator() override;
 
-  llvm::Expected<CodeTemplate>
-  generateCodeTemplate(const Instruction &Instr) const override;
+  llvm::Expected<std::vector<CodeTemplate>>
+  generateCodeTemplates(const Instruction &Instr) const override;
 
   static constexpr const size_t kMinNumDifferentAddresses = 6;
 
@@ -68,11 +69,11 @@ public:
   static constexpr const size_t kMinNumDifferentAddresses = 6;
 
 private:
-  std::vector<BenchmarkMeasure>
-  runMeasurements(const ExecutableFunction &EF,
-                  ScratchSpace &Scratch) const override;
+  llvm::Expected<std::vector<BenchmarkMeasure>>
+  runMeasurements(const FunctionExecutor &Executor) const override;
 };
 
 } // namespace exegesis
+} // namespace llvm
 
 #endif // LLVM_TOOLS_LLVM_EXEGESIS_UOPS_H

@@ -101,12 +101,10 @@ AMDGPUAsmPrinter::AMDGPUAsmPrinter(TargetMachine &TM,
                                    std::unique_ptr<MCStreamer> Streamer)
   : AsmPrinter(TM, std::move(Streamer)) {
     if (IsaInfo::hasCodeObjectV3(getSTI()))
-      HSAMetadataStream = new MetadataStreamerV3();
+      HSAMetadataStream.reset(new MetadataStreamerV3());
     else
-      HSAMetadataStream = new MetadataStreamerV2();
+      HSAMetadataStream.reset(new MetadataStreamerV2());
 }
-
-AMDGPUAsmPrinter::~AMDGPUAsmPrinter() { delete HSAMetadataStream; }
 
 StringRef AMDGPUAsmPrinter::getPassName() const {
   return "AMDGPU Assembly Printer";
@@ -123,6 +121,14 @@ AMDGPUTargetStreamer* AMDGPUAsmPrinter::getTargetStreamer() const {
 }
 
 void AMDGPUAsmPrinter::EmitStartOfAsmFile(Module &M) {
+  if (IsaInfo::hasCodeObjectV3(getSTI())) {
+    std::string ExpectedTarget;
+    raw_string_ostream ExpectedTargetOS(ExpectedTarget);
+    IsaInfo::streamIsaVersion(getSTI(), ExpectedTargetOS);
+
+    getTargetStreamer()->EmitDirectiveAMDGCNTarget(ExpectedTarget);
+  }
+
   if (TM.getTargetTriple().getOS() != Triple::AMDHSA &&
       TM.getTargetTriple().getOS() != Triple::AMDPAL)
     return;
@@ -132,6 +138,9 @@ void AMDGPUAsmPrinter::EmitStartOfAsmFile(Module &M) {
 
   if (TM.getTargetTriple().getOS() == Triple::AMDPAL)
     readPALMetadata(M);
+
+  if (IsaInfo::hasCodeObjectV3(getSTI()))
+    return;
 
   // HSA emits NT_AMDGPU_HSA_CODE_OBJECT_VERSION for code objects v2.
   if (TM.getTargetTriple().getOS() == Triple::AMDHSA)
@@ -905,9 +914,9 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
   }
 
   ProgInfo.SGPRBlocks = IsaInfo::getNumSGPRBlocks(
-      getSTI(), ProgInfo.NumSGPRsForWavesPerEU);
+      &STM, ProgInfo.NumSGPRsForWavesPerEU);
   ProgInfo.VGPRBlocks = IsaInfo::getNumVGPRBlocks(
-      getSTI(), ProgInfo.NumVGPRsForWavesPerEU);
+      &STM, ProgInfo.NumVGPRsForWavesPerEU);
 
   // Update DebuggerWavefrontPrivateSegmentOffsetSGPR and
   // DebuggerPrivateSegmentBufferSGPR fields if "amdgpu-debugger-emit-prologue"
@@ -1002,7 +1011,6 @@ static unsigned getRsrcReg(CallingConv::ID CallConv) {
 
 void AMDGPUAsmPrinter::EmitProgramInfoSI(const MachineFunction &MF,
                                          const SIProgramInfo &CurrentProgramInfo) {
-  const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   unsigned RsrcReg = getRsrcReg(MF.getFunction().getCallingConv());
 
@@ -1023,10 +1031,9 @@ void AMDGPUAsmPrinter::EmitProgramInfoSI(const MachineFunction &MF,
     OutStreamer->EmitIntValue(RsrcReg, 4);
     OutStreamer->EmitIntValue(S_00B028_VGPRS(CurrentProgramInfo.VGPRBlocks) |
                               S_00B028_SGPRS(CurrentProgramInfo.SGPRBlocks), 4);
-    if (STM.isVGPRSpillingEnabled(MF.getFunction())) {
-      OutStreamer->EmitIntValue(R_0286E8_SPI_TMPRING_SIZE, 4);
-      OutStreamer->EmitIntValue(S_0286E8_WAVESIZE(CurrentProgramInfo.ScratchBlocks), 4);
-    }
+    OutStreamer->EmitIntValue(R_0286E8_SPI_TMPRING_SIZE, 4);
+    OutStreamer->EmitIntValue(
+        S_0286E8_WAVESIZE(CurrentProgramInfo.ScratchBlocks), 4);
   }
 
   if (MF.getFunction().getCallingConv() == CallingConv::AMDGPU_PS) {

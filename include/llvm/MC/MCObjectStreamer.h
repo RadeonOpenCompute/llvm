@@ -39,12 +39,21 @@ class MCObjectStreamer : public MCStreamer {
   bool EmitEHFrame;
   bool EmitDebugFrame;
   SmallVector<MCSymbol *, 2> PendingLabels;
+  struct PendingMCFixup {
+    const MCSymbol *Sym;
+    MCFixup Fixup;
+    MCDataFragment *DF;
+    PendingMCFixup(const MCSymbol *McSym, MCDataFragment *F, MCFixup McFixup)
+        : Sym(McSym), Fixup(McFixup), DF(F) {}
+  };
+  SmallVector<PendingMCFixup, 2> PendingFixups;
 
   virtual void EmitInstToData(const MCInst &Inst, const MCSubtargetInfo&) = 0;
   void EmitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
   void EmitCFIEndProcImpl(MCDwarfFrameInfo &Frame) override;
   MCSymbol *EmitCFILabel() override;
   void EmitInstructionImpl(const MCInst &Inst, const MCSubtargetInfo &STI);
+  void resolvePendingFixups();
 
 protected:
   MCObjectStreamer(MCContext &Context, std::unique_ptr<MCAsmBackend> TAB,
@@ -138,7 +147,6 @@ public:
                                 unsigned PointerSize);
   void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
                                  const MCSymbol *Label);
-  void EmitBTFAdvanceLineAddr(const MCSymbol *Label, unsigned Size);
   void EmitCVLocDirective(unsigned FunctionId, unsigned FileNo, unsigned Line,
                           unsigned Column, bool PrologueEnd, bool IsStmt,
                           StringRef FileName, SMLoc Loc) override;

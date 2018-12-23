@@ -7,7 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Dwarf2BTF.h"
 #include "DwarfFile.h"
 #include "DwarfCompileUnit.h"
 #include "DwarfDebug.h"
@@ -16,8 +15,6 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DIE.h"
 #include "llvm/IR/DebugInfoMetadata.h"
-#include "llvm/MC/MCBTFContext.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
 #include <algorithm>
 #include <cstdint>
@@ -42,13 +39,17 @@ void DwarfFile::emitUnit(DwarfUnit *TheU, bool UseOffsets) {
   if (TheU->getCUNode()->isDebugDirectivesOnly())
     return;
 
-  DIE &Die = TheU->getUnitDie();
-  MCSection *USection = TheU->getSection();
-  Asm->OutStreamer->SwitchSection(USection);
+  MCSection *S = TheU->getSection();
 
+  if (!S)
+    return;
+
+  Asm->OutStreamer->SwitchSection(S);
   TheU->emitHeader(UseOffsets);
+  Asm->emitDwarfDIE(TheU->getUnitDie());
 
-  Asm->emitDwarfDIE(Die);
+  if (MCSymbol *EndLabel = TheU->getEndLabel())
+    Asm->OutStreamer->EmitLabel(EndLabel);
 }
 
 // Compute the size and offset for each DIE.
@@ -91,13 +92,6 @@ void DwarfFile::emitStrings(MCSection *StrSection, MCSection *OffsetSection,
   StrPool.emit(*Asm, StrSection, OffsetSection, UseRelativeOffsets);
 }
 
-void DwarfFile::emitBTFSection(bool IsLittleEndian) {
-  Dwarf2BTF Dwarf2BTF(Asm->OutContext, IsLittleEndian);
-  for (auto &TheU : CUs)
-    Dwarf2BTF.addDwarfCU(TheU.get());
-  Dwarf2BTF.finish();
-}
-
 bool DwarfFile::addScopeVariable(LexicalScope *LS, DbgVariable *Var) {
   auto &ScopeVars = ScopeVariables[LS];
   const DILocalVariable *DV = Var->getVariable();
@@ -118,4 +112,11 @@ bool DwarfFile::addScopeVariable(LexicalScope *LS, DbgVariable *Var) {
 void DwarfFile::addScopeLabel(LexicalScope *LS, DbgLabel *Label) {
   SmallVectorImpl<DbgLabel *> &Labels = ScopeLabels[LS];
   Labels.push_back(Label);
+}
+
+std::pair<uint32_t, RangeSpanList *>
+DwarfFile::addRange(const DwarfCompileUnit &CU, SmallVector<RangeSpan, 2> R) {
+  CURangeLists.push_back(
+      RangeSpanList(Asm->createTempSymbol("debug_ranges"), CU, std::move(R)));
+  return std::make_pair(CURangeLists.size() - 1, &CURangeLists.back());
 }
