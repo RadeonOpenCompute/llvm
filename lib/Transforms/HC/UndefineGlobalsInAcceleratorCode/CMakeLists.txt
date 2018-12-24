@@ -1,5 +1,6 @@
-add_llvm_loadable_module(
+add_llvm_library(
     LLVMUndefineGlobalsInAcceleratorCode
-    UndefineGlobalsInAcceleratorCode.cpp)
+        MODULE
+        UndefineGlobalsInAcceleratorCode.cpp)
 
 add_dependencies(LLVMUndefineGlobalsInAcceleratorCode intrinsics_gen)
