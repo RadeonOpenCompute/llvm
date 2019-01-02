@@ -1,4 +1,6 @@
 add_llvm_library(
-    LLVMPromotePointerKernArgsToGlobal PromotePointerKernArgsToGlobal.cpp)
+    LLVMPromotePointerKernArgsToGlobal
+        MODULE
+        PromotePointerKernArgsToGlobal.cpp)
 
 add_dependencies(LLVMPromotePointerKernArgsToGlobal intrinsics_gen)
