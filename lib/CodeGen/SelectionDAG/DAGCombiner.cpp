@@ -915,9 +915,11 @@ static bool isConstantOrConstantVector(SDValue N, bool NoOpaques = false) {
 
 // Determines if a BUILD_VECTOR is composed of all-constants possibly mixed with
 // undef's.
-static bool isAnyConstantBuildVector(const SDNode *N) {
-  return ISD::isBuildVectorOfConstantSDNodes(N) ||
-         ISD::isBuildVectorOfConstantFPSDNodes(N);
+static bool isAnyConstantBuildVector(SDValue V, bool NoOpaques = false) {
+  if (V.getOpcode() != ISD::BUILD_VECTOR)
+    return false;
+  return isConstantOrConstantVector(V, NoOpaques) ||
+         ISD::isBuildVectorOfConstantFPSDNodes(V.getNode());
 }
 
 SDValue DAGCombiner::ReassociateOps(unsigned Opc, const SDLoc &DL, SDValue N0,
@@ -3161,8 +3163,19 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
   if (DAG.SignBitIsZero(N1) && DAG.SignBitIsZero(N0))
     return DAG.getNode(ISD::UDIV, DL, N1.getValueType(), N0, N1);
 
-  if (SDValue V = visitSDIVLike(N0, N1, N))
+  if (SDValue V = visitSDIVLike(N0, N1, N)) {
+    // If the corresponding remainder node exists, update its users with
+    // (Dividend - (Quotient * Divisor).
+    if (SDNode *RemNode = DAG.getNodeIfExists(ISD::SREM, N->getVTList(),
+                                              { N0, N1 })) {
+      SDValue Mul = DAG.getNode(ISD::MUL, DL, VT, V, N1);
+      SDValue Sub = DAG.getNode(ISD::SUB, DL, VT, N0, Mul);
+      AddToWorklist(Mul.getNode());
+      AddToWorklist(Sub.getNode());
+      CombineTo(RemNode, Sub);
+    }
     return V;
+  }
 
   // sdiv, srem -> sdivrem
   // If the divisor is constant, then return DIVREM only if isIntDivCheap() is
@@ -3288,8 +3301,19 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
   if (SDValue NewSel = foldBinOpIntoSelect(N))
     return NewSel;
 
-  if (SDValue V = visitUDIVLike(N0, N1, N))
+  if (SDValue V = visitUDIVLike(N0, N1, N)) {
+    // If the corresponding remainder node exists, update its users with
+    // (Dividend - (Quotient * Divisor).
+    if (SDNode *RemNode = DAG.getNodeIfExists(ISD::UREM, N->getVTList(),
+                                              { N0, N1 })) {
+      SDValue Mul = DAG.getNode(ISD::MUL, DL, VT, V, N1);
+      SDValue Sub = DAG.getNode(ISD::SUB, DL, VT, N0, Mul);
+      AddToWorklist(Mul.getNode());
+      AddToWorklist(Sub.getNode());
+      CombineTo(RemNode, Sub);
+    }
     return V;
+  }
 
   // sdiv, srem -> sdivrem
   // If the divisor is constant, then return DIVREM only if isIntDivCheap() is
@@ -3408,6 +3432,11 @@ SDValue DAGCombiner::visitREM(SDNode *N) {
     SDValue OptimizedDiv =
         isSigned ? visitSDIVLike(N0, N1, N) : visitUDIVLike(N0, N1, N);
     if (OptimizedDiv.getNode()) {
+      // If the equivalent Div node also exists, update its users.
+      unsigned DivOpcode = isSigned ? ISD::SDIV : ISD::UDIV;
+      if (SDNode *DivNode = DAG.getNodeIfExists(DivOpcode, N->getVTList(),
+                                                { N0, N1 }))
+        CombineTo(DivNode, OptimizedDiv);
       SDValue Mul = DAG.getNode(ISD::MUL, DL, VT, OptimizedDiv, N1);
       SDValue Sub = DAG.getNode(ISD::SUB, DL, VT, N0, Mul);
       AddToWorklist(OptimizedDiv.getNode());
@@ -9414,10 +9443,13 @@ SDValue DAGCombiner::visitSIGN_EXTEND_INREG(SDNode *N) {
 
   // fold (sext_in_reg (sext x)) -> (sext x)
   // fold (sext_in_reg (aext x)) -> (sext x)
-  // if x is small enough.
+  // if x is small enough or if we know that x has more than 1 sign bit and the
+  // sign_extend_inreg is extending from one of them.
   if (N0.getOpcode() == ISD::SIGN_EXTEND || N0.getOpcode() == ISD::ANY_EXTEND) {
     SDValue N00 = N0.getOperand(0);
-    if (N00.getScalarValueSizeInBits() <= EVTBits &&
+    unsigned N00Bits = N00.getScalarValueSizeInBits();
+    if ((N00Bits <= EVTBits ||
+         (N00Bits - DAG.ComputeNumSignBits(N00)) < EVTBits) &&
         (!LegalOperations || TLI.isOperationLegal(ISD::SIGN_EXTEND, VT)))
       return DAG.getNode(ISD::SIGN_EXTEND, SDLoc(N), VT, N00);
   }
@@ -10156,7 +10188,7 @@ SDValue DAGCombiner::visitBITCAST(SDNode *N) {
   // float vectors bitcast to integer vectors) into shuffles.
   // bitcast(shuffle(bitcast(s0),bitcast(s1))) -> shuffle(s0,s1)
   if (Level < AfterLegalizeDAG && TLI.isTypeLegal(VT) && VT.isVector() &&
-      N0->getOpcode() == ISD::VECTOR_SHUFFLE &&
+      N0->getOpcode() == ISD::VECTOR_SHUFFLE && N0.hasOneUse() &&
       VT.getVectorNumElements() >= N0.getValueType().getVectorNumElements() &&
       !(VT.getVectorNumElements() % N0.getValueType().getVectorNumElements())) {
     ShuffleVectorSDNode *SVN = cast<ShuffleVectorSDNode>(N0);
@@ -15550,6 +15582,40 @@ SDValue DAGCombiner::scalarizeExtractedVectorLoad(SDNode *EVE, EVT InVecVT,
   return SDValue(EVE, 0);
 }
 
+/// Transform a vector binary operation into a scalar binary operation by moving
+/// the math/logic after an extract element of a vector.
+static SDValue scalarizeExtractedBinop(SDNode *ExtElt, SelectionDAG &DAG,
+                                       bool LegalOperations) {
+  SDValue Vec = ExtElt->getOperand(0);
+  SDValue Index = ExtElt->getOperand(1);
+  auto *IndexC = dyn_cast<ConstantSDNode>(Index);
+  if (!IndexC || !ISD::isBinaryOp(Vec.getNode()) || !Vec.hasOneUse())
+    return SDValue();
+
+  // Targets may want to avoid this to prevent an expensive register transfer.
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  if (!TLI.shouldScalarizeBinop(Vec))
+    return SDValue();
+
+  // Extracting an element of a vector constant is constant-folded, so this
+  // transform is just replacing a vector op with a scalar op while moving the
+  // extract.
+  SDValue Op0 = Vec.getOperand(0);
+  SDValue Op1 = Vec.getOperand(1);
+  if (isAnyConstantBuildVector(Op0, true) ||
+      isAnyConstantBuildVector(Op1, true)) {
+    // extractelt (binop X, C), IndexC --> binop (extractelt X, IndexC), C'
+    // extractelt (binop C, X), IndexC --> binop C', (extractelt X, IndexC)
+    SDLoc DL(ExtElt);
+    EVT VT = ExtElt->getValueType(0);
+    SDValue Ext0 = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, VT, Op0, Index);
+    SDValue Ext1 = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, VT, Op1, Index);
+    return DAG.getNode(Vec.getOpcode(), DL, VT, Ext0, Ext1);
+  }
+
+  return SDValue();
+}
+
 SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
   SDValue VecOp = N->getOperand(0);
   SDValue Index = N->getOperand(1);
@@ -15639,6 +15705,9 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
       }
     }
   }
+
+  if (SDValue BO = scalarizeExtractedBinop(N, DAG, LegalOperations))
+    return BO;
 
   // Transform: (EXTRACT_VECTOR_ELT( VECTOR_SHUFFLE )) -> EXTRACT_VECTOR_ELT.
   // We only perform this optimization before the op legalization phase because
@@ -17025,8 +17094,8 @@ static SDValue combineShuffleOfScalars(ShuffleVectorSDNode *SVN,
     if (!N1->hasOneUse())
       return SDValue();
 
-    bool N0AnyConst = isAnyConstantBuildVector(N0.getNode());
-    bool N1AnyConst = isAnyConstantBuildVector(N1.getNode());
+    bool N0AnyConst = isAnyConstantBuildVector(N0);
+    bool N1AnyConst = isAnyConstantBuildVector(N1);
     if (N0AnyConst && !N1AnyConst && !ISD::isBuildVectorAllZeros(N0.getNode()))
       return SDValue();
     if (!N0AnyConst && N1AnyConst && !ISD::isBuildVectorAllZeros(N1.getNode()))

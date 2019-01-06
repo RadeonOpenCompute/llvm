@@ -72,7 +72,7 @@ static void ConnectProlog(Loop *L, Value *BECount, unsigned Count,
                           LoopInfo *LI, bool PreserveLCSSA) {
   // Loop structure should be the following:
   // Preheader
-  //  PrologPreHeader
+  //  PrologHeader
   //  ...
   //  PrologLatch
   //  PrologExit
@@ -108,7 +108,7 @@ static void ConnectProlog(Loop *L, Value *BECount, unsigned Count,
         NewPN->addIncoming(PN.getIncomingValueForBlock(NewPreHeader),
                            PreHeader);
       } else {
-        // Succ is LatchExit
+        // Succ is LatchExit.
         NewPN->addIncoming(UndefValue::get(PN.getType()), PreHeader);
       }
 
@@ -926,6 +926,12 @@ bool llvm::UnrollRuntimeLoopRemainder(Loop *L, unsigned Count,
   // If this loop is nested, then the loop unroller changes the code in the any
   // of its parent loops, so the Scalar Evolution pass needs to be run again.
   SE->forgetTopmostLoop(L);
+
+  // Verify that the Dom Tree is correct.
+#if defined(EXPENSIVE_CHECKS) && !defined(NDEBUG)
+  if (DT)
+    assert(DT->verify(DominatorTree::VerificationLevel::Full));
+#endif
 
   // Canonicalize to LoopSimplifyForm both original and remainder loops. We
   // cannot rely on the LoopUnrollPass to do this because it only does

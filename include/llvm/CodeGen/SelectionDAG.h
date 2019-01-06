@@ -308,6 +308,9 @@ public:
         : DAGUpdateListener(DAG), Callback(std::move(Callback)) {}
 
     void NodeDeleted(SDNode *N, SDNode *E) override { Callback(N, E); }
+
+   private:
+    virtual void anchor();
   };
 
   /// When true, additional steps are taken to
@@ -1127,6 +1130,13 @@ public:
 
   /// Expand the specified \c ISD::VACOPY node as the Legalize pass would.
   SDValue expandVACopy(SDNode *Node);
+
+  /// Returs an GlobalAddress of the function from the current module with
+  /// name matching the given ExternalSymbol. Additionally can provide the
+  /// matched function.
+  /// Panics the function doesn't exists.
+  SDValue getSymbolFunctionGlobalAddress(SDValue Op,
+                                         Function **TargetFunction = nullptr);
 
   /// *Mutate* the specified node in-place to have the
   /// specified operands.  If the resultant node already exists in the DAG,
