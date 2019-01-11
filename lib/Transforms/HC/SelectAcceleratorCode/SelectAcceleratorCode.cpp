@@ -109,13 +109,18 @@ class SelectAcceleratorCode : public ModulePass {
     bool alwaysInline_(Function &F)
     {
         if (!F.hasFnAttribute(Attribute::AlwaysInline)) {
-            if (F.hasFnAttribute(Attribute::NoInline)) {
-                F.removeFnAttr(Attribute::NoInline);
-            }
-            F.addFnAttr(Attribute::AlwaysInline);
+            //if (F.hasFnAttribute(Attribute::NoInline)) {
+            //    F.removeFnAttr(Attribute::NoInline);
+            //}
+            //F.addFnAttr(Attribute::AlwaysInline);
 
             return false;
         }
+
+	// Enable this when stress testing function calls
+        //else {
+        //    F.removeFnAttr(Attribute::AlwaysInline);
+        //}
 
         return true;
     }
@@ -154,10 +159,10 @@ public:
             return !isInlineViable(F) && !F.isIntrinsic();
         });
 
-        if (It != M.end()) {
-            M.getContext().diagnose(DiagnosticInfoUnsupported{
-                *It, "The function cannot be inlined."});
-        }
+        //if (It != M.end()) {
+        //    M.getContext().diagnose(DiagnosticInfoUnsupported{
+        //        *It, "The function cannot be inlined."});
+        //}
 
         return false;
     }
