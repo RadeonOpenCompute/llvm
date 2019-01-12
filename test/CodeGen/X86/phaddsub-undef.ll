@@ -75,12 +75,12 @@ define <8 x i32> @test15_undef(<8 x i32> %a, <8 x i32> %b) {
 ;
 ; AVX2-LABEL: test15_undef:
 ; AVX2:       # %bb.0:
-; AVX2-NEXT:    vphaddd %ymm0, %ymm0, %ymm0
+; AVX2-NEXT:    vphaddd %ymm1, %ymm0, %ymm0
 ; AVX2-NEXT:    retq
 ;
 ; AVX512-LABEL: test15_undef:
 ; AVX512:       # %bb.0:
-; AVX512-NEXT:    vphaddd %ymm0, %ymm0, %ymm0
+; AVX512-NEXT:    vphaddd %ymm1, %ymm0, %ymm0
 ; AVX512-NEXT:    retq
   %vecext = extractelement <8 x i32> %a, i32 0
   %vecext1 = extractelement <8 x i32> %a, i32 1
@@ -91,6 +91,40 @@ define <8 x i32> @test15_undef(<8 x i32> %a, <8 x i32> %b) {
   %add4 = add i32 %vecext2, %vecext3
   %vecinit5 = insertelement <8 x i32> %vecinit, i32 %add4, i32 6
   ret <8 x i32> %vecinit5
+}
+
+define <8 x i32> @PR40243_alt(<8 x i32> %a, <8 x i32> %b) {
+; SSE-LABEL: PR40243_alt:
+; SSE:       # %bb.0:
+; SSE-NEXT:    phaddd %xmm3, %xmm1
+; SSE-NEXT:    retq
+;
+; AVX1-LABEL: PR40243_alt:
+; AVX1:       # %bb.0:
+; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm1
+; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm0
+; AVX1-NEXT:    vphaddd %xmm1, %xmm0, %xmm0
+; AVX1-NEXT:    vinsertf128 $1, %xmm0, %ymm0, %ymm0
+; AVX1-NEXT:    retq
+;
+; AVX2-LABEL: PR40243_alt:
+; AVX2:       # %bb.0:
+; AVX2-NEXT:    vphaddd %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    retq
+;
+; AVX512-LABEL: PR40243_alt:
+; AVX512:       # %bb.0:
+; AVX512-NEXT:    vphaddd %ymm1, %ymm0, %ymm0
+; AVX512-NEXT:    retq
+  %a4 = extractelement <8 x i32> %a, i32 4
+  %a5 = extractelement <8 x i32> %a, i32 5
+  %add4 = add i32 %a4, %a5
+  %b6 = extractelement <8 x i32> %b, i32 6
+  %b7 = extractelement <8 x i32> %b, i32 7
+  %add7 = add i32 %b6, %b7
+  %r4 = insertelement <8 x i32> undef, i32 %add4, i32 4
+  %r = insertelement <8 x i32> %r4, i32 %add7, i32 7
+  ret <8 x i32> %r
 }
 
 define <8 x i32> @test16_undef(<8 x i32> %a, <8 x i32> %b) {
