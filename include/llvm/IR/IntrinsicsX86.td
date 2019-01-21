@@ -1,9 +1,8 @@
 //===- IntrinsicsX86.td - Defines X86 intrinsics -----------*- tablegen -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1909,28 +1908,28 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
   def int_x86_xop_vfrcz_ps_256 : GCCBuiltin<"__builtin_ia32_vfrczps256">,
               Intrinsic<[llvm_v8f32_ty], [llvm_v8f32_ty], [IntrNoMem]>;
 
-  def int_x86_xop_vpcomb : GCCBuiltin<"__builtin_ia32_vpcomb">,
+  def int_x86_xop_vpcomb :
               Intrinsic<[llvm_v16i8_ty], [llvm_v16i8_ty, llvm_v16i8_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomw : GCCBuiltin<"__builtin_ia32_vpcomw">,
+  def int_x86_xop_vpcomw :
               Intrinsic<[llvm_v8i16_ty], [llvm_v8i16_ty, llvm_v8i16_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomd : GCCBuiltin<"__builtin_ia32_vpcomd">,
+  def int_x86_xop_vpcomd :
               Intrinsic<[llvm_v4i32_ty], [llvm_v4i32_ty, llvm_v4i32_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomq : GCCBuiltin<"__builtin_ia32_vpcomq">,
+  def int_x86_xop_vpcomq :
               Intrinsic<[llvm_v2i64_ty], [llvm_v2i64_ty, llvm_v2i64_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomub : GCCBuiltin<"__builtin_ia32_vpcomub">,
+  def int_x86_xop_vpcomub :
               Intrinsic<[llvm_v16i8_ty], [llvm_v16i8_ty, llvm_v16i8_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomuw : GCCBuiltin<"__builtin_ia32_vpcomuw">,
+  def int_x86_xop_vpcomuw :
               Intrinsic<[llvm_v8i16_ty], [llvm_v8i16_ty, llvm_v8i16_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomud : GCCBuiltin<"__builtin_ia32_vpcomud">,
+  def int_x86_xop_vpcomud :
               Intrinsic<[llvm_v4i32_ty], [llvm_v4i32_ty, llvm_v4i32_ty,
                          llvm_i8_ty], [IntrNoMem]>;
-  def int_x86_xop_vpcomuq : GCCBuiltin<"__builtin_ia32_vpcomuq">,
+  def int_x86_xop_vpcomuq :
               Intrinsic<[llvm_v2i64_ty], [llvm_v2i64_ty, llvm_v2i64_ty,
                          llvm_i8_ty], [IntrNoMem]>;
 
