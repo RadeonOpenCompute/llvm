@@ -124,8 +124,10 @@ namespace opts {
 
   // -symbols
   // Also -s in llvm-readelf mode, or -t in llvm-readobj mode.
-  cl::opt<bool> Symbols("symbols",
-    cl::desc("Display the symbol table"));
+  cl::opt<bool>
+      Symbols("symbols",
+              cl::desc("Display the symbol table. Also display the dynamic "
+                       "symbol table when using GNU output style for ELF"));
   cl::alias SymbolsGNU("syms", cl::desc("Alias for --symbols"),
                        cl::aliasopt(Symbols));
 
@@ -135,6 +137,11 @@ namespace opts {
     cl::desc("Display the dynamic symbol table"));
   cl::alias DynSymsGNU("dyn-syms", cl::desc("Alias for --dyn-symbols"),
                        cl::aliasopt(DynamicSymbols));
+
+  // -hash-symbols
+  cl::opt<bool> HashSymbols(
+      "hash-symbols",
+      cl::desc("Display the dynamic symbols derived from the hash section"));
 
   // -unwind, -u
   cl::opt<bool> UnwindInfo("unwind",
@@ -457,10 +464,10 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer) {
     Dumper->printRelocations();
   if (opts::DynRelocs)
     Dumper->printDynamicRelocations();
-  if (opts::Symbols)
-    Dumper->printSymbols();
-  if (opts::DynamicSymbols)
-    Dumper->printDynamicSymbols();
+  if (opts::Symbols || opts::DynamicSymbols)
+    Dumper->printSymbols(opts::Symbols, opts::DynamicSymbols);
+  if (opts::HashSymbols)
+    Dumper->printHashSymbols();
   if (opts::UnwindInfo)
     Dumper->printUnwindInfo();
   if (opts::DynamicTable)

@@ -147,8 +147,8 @@ public:
   void printSectionHeaders() override;
   void printRelocations() override;
   void printDynamicRelocations() override;
-  void printSymbols() override;
-  void printDynamicSymbols() override;
+  void printSymbols(bool PrintSymbols, bool PrintDynamicSymbols) override;
+  void printHashSymbols() override;
   void printUnwindInfo() override;
 
   void printDynamicTable() override;
@@ -328,10 +328,11 @@ public:
   virtual void printGroupSections(const ELFFile<ELFT> *Obj) = 0;
   virtual void printRelocations(const ELFFile<ELFT> *Obj) = 0;
   virtual void printSectionHeaders(const ELFFile<ELFT> *Obj) = 0;
-  virtual void printSymbols(const ELFFile<ELFT> *Obj) = 0;
-  virtual void printDynamicSymbols(const ELFFile<ELFT> *Obj) = 0;
+  virtual void printSymbols(const ELFFile<ELFT> *Obj, bool PrintSymbols,
+                            bool PrintDynamicSymbols) = 0;
+  virtual void printHashSymbols(const ELFFile<ELFT> *Obj) {}
   virtual void printDynamicRelocations(const ELFFile<ELFT> *Obj) = 0;
-  virtual void printSymtabMessage(const ELFFile<ELFT> *obj, StringRef Name,
+  virtual void printSymtabMessage(const ELFFile<ELFT> *Obj, StringRef Name,
                                   size_t Offset) {}
   virtual void printSymbol(const ELFFile<ELFT> *Obj, const Elf_Sym *Symbol,
                            const Elf_Sym *FirstSym, StringRef StrTable,
@@ -363,8 +364,9 @@ public:
   void printGroupSections(const ELFFile<ELFT> *Obj) override;
   void printRelocations(const ELFO *Obj) override;
   void printSectionHeaders(const ELFO *Obj) override;
-  void printSymbols(const ELFO *Obj) override;
-  void printDynamicSymbols(const ELFO *Obj) override;
+  void printSymbols(const ELFO *Obj, bool PrintSymbols,
+                    bool PrintDynamicSymbols) override;
+  void printHashSymbols(const ELFO *Obj) override;
   void printDynamicRelocations(const ELFO *Obj) override;
   void printSymtabMessage(const ELFO *Obj, StringRef Name,
                           size_t Offset) override;
@@ -456,8 +458,8 @@ public:
   void printRelocations(const ELFO *Obj) override;
   void printRelocations(const Elf_Shdr *Sec, const ELFO *Obj);
   void printSectionHeaders(const ELFO *Obj) override;
-  void printSymbols(const ELFO *Obj) override;
-  void printDynamicSymbols(const ELFO *Obj) override;
+  void printSymbols(const ELFO *Obj, bool PrintSymbols,
+                    bool PrintDynamicSymbols) override;
   void printDynamicRelocations(const ELFO *Obj) override;
   void printProgramHeaders(const ELFO *Obj) override;
   void printHashHistogram(const ELFFile<ELFT> *Obj) override;
@@ -471,6 +473,8 @@ public:
 private:
   void printRelocation(const ELFO *Obj, Elf_Rela Rel, const Elf_Shdr *SymTab);
   void printDynamicRelocation(const ELFO *Obj, Elf_Rela Rel);
+  void printSymbols(const ELFO *Obj);
+  void printDynamicSymbols(const ELFO *Obj);
   void printSymbol(const ELFO *Obj, const Elf_Sym *Symbol, const Elf_Sym *First,
                    StringRef StrTable, bool IsDynamic) override;
 
@@ -1619,14 +1623,16 @@ template <class ELFT> void ELFDumper<ELFT>::printDynamicRelocations() {
   ELFDumperStyle->printDynamicRelocations(ObjF->getELFFile());
 }
 
-template<class ELFT>
-void ELFDumper<ELFT>::printSymbols() {
-  ELFDumperStyle->printSymbols(ObjF->getELFFile());
+template <class ELFT>
+void ELFDumper<ELFT>::printSymbols(bool PrintSymbols,
+                                   bool PrintDynamicSymbols) {
+  ELFDumperStyle->printSymbols(ObjF->getELFFile(), PrintSymbols,
+                               PrintDynamicSymbols);
 }
 
 template<class ELFT>
-void ELFDumper<ELFT>::printDynamicSymbols() {
-  ELFDumperStyle->printDynamicSymbols(ObjF->getELFFile());
+void ELFDumper<ELFT>::printHashSymbols() {
+  ELFDumperStyle->printHashSymbols(ObjF->getELFFile());
 }
 
 template <class ELFT> void ELFDumper<ELFT>::printHashHistogram() {
@@ -3167,28 +3173,26 @@ void GNUStyle<ELFT>::printHashedSymbol(const ELFO *Obj, const Elf_Sym *FirstSym,
   OS << "\n";
 }
 
-template <class ELFT> void GNUStyle<ELFT>::printSymbols(const ELFO *Obj) {
-  if (opts::DynamicSymbols)
+template <class ELFT>
+void GNUStyle<ELFT>::printSymbols(const ELFO *Obj, bool PrintSymbols,
+                                  bool PrintDynamicSymbols) {
+  if (!PrintSymbols && !PrintDynamicSymbols)
     return;
+  // GNU readelf prints both the .dynsym and .symtab with --symbols.
   this->dumper()->printSymbolsHelper(true);
-  this->dumper()->printSymbolsHelper(false);
+  if (PrintSymbols)
+    this->dumper()->printSymbolsHelper(false);
 }
 
-template <class ELFT>
-void GNUStyle<ELFT>::printDynamicSymbols(const ELFO *Obj) {
+template <class ELFT> void GNUStyle<ELFT>::printHashSymbols(const ELFO *Obj) {
   if (this->dumper()->getDynamicStringTable().empty())
     return;
   auto StringTable = this->dumper()->getDynamicStringTable();
   auto DynSyms = this->dumper()->dynamic_symbols();
-  auto GnuHash = this->dumper()->getGnuHashTable();
   auto SysVHash = this->dumper()->getHashTable();
 
-  // If no hash or .gnu.hash found, try using symbol table
-  if (GnuHash == nullptr && SysVHash == nullptr)
-    this->dumper()->printSymbolsHelper(true);
-
   // Try printing .hash
-  if (this->dumper()->getHashTable()) {
+  if (SysVHash) {
     OS << "\n Symbol table of .hash for image:\n";
     if (ELFT::Is64Bits)
       OS << "  Num Buc:    Value          Size   Type   Bind Vis      Ndx Name";
@@ -3212,6 +3216,7 @@ void GNUStyle<ELFT>::printDynamicSymbols(const ELFO *Obj) {
   }
 
   // Try printing .gnu.hash
+  auto GnuHash = this->dumper()->getGnuHashTable();
   if (GnuHash) {
     OS << "\n Symbol table of .gnu.hash for image:\n";
     if (ELFT::Is64Bits)
@@ -4403,6 +4408,15 @@ void LLVMStyle<ELFT>::printSymbol(const ELFO *Obj, const Elf_Sym *Symbol,
     W.printFlags("Other", Symbol->st_other, makeArrayRef(SymOtherFlags), 0x3u);
   }
   W.printHex("Section", SectionName, SectionIndex);
+}
+
+template <class ELFT>
+void LLVMStyle<ELFT>::printSymbols(const ELFO *Obj, bool PrintSymbols,
+                                   bool PrintDynamicSymbols) {
+  if (PrintSymbols)
+    printSymbols(Obj);
+  if (PrintDynamicSymbols)
+    printDynamicSymbols(Obj);
 }
 
 template <class ELFT> void LLVMStyle<ELFT>::printSymbols(const ELFO *Obj) {

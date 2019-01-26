@@ -95,6 +95,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::ATOMIC_LOAD_MAX:            return "AtomicLoadMax";
   case ISD::ATOMIC_LOAD_UMIN:           return "AtomicLoadUMin";
   case ISD::ATOMIC_LOAD_UMAX:           return "AtomicLoadUMax";
+  case ISD::ATOMIC_LOAD_FADD:           return "AtomicLoadFAdd";
   case ISD::ATOMIC_LOAD:                return "AtomicLoad";
   case ISD::ATOMIC_STORE:               return "AtomicStore";
   case ISD::PCMARKER:                   return "PCMarker";
@@ -649,6 +650,36 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
     const char *AM = getIndexedModeName(ST->getAddressingMode());
     if (*AM)
       OS << ", " << AM;
+
+    OS << ">";
+  } else if (const MaskedLoadSDNode *MLd = dyn_cast<MaskedLoadSDNode>(this)) {
+    OS << "<";
+
+    printMemOperand(OS, *MLd->getMemOperand(), G);
+
+    bool doExt = true;
+    switch (MLd->getExtensionType()) {
+    default: doExt = false; break;
+    case ISD::EXTLOAD:  OS << ", anyext"; break;
+    case ISD::SEXTLOAD: OS << ", sext"; break;
+    case ISD::ZEXTLOAD: OS << ", zext"; break;
+    }
+    if (doExt)
+      OS << " from " << MLd->getMemoryVT().getEVTString();
+
+    if (MLd->isExpandingLoad())
+      OS << ", expanding";
+
+    OS << ">";
+  } else if (const MaskedStoreSDNode *MSt = dyn_cast<MaskedStoreSDNode>(this)) {
+    OS << "<";
+    printMemOperand(OS, *MSt->getMemOperand(), G);
+
+    if (MSt->isTruncatingStore())
+      OS << ", trunc to " << MSt->getMemoryVT().getEVTString();
+
+    if (MSt->isCompressingStore())
+      OS << ", compressing";
 
     OS << ">";
   } else if (const MemSDNode* M = dyn_cast<MemSDNode>(this)) {
