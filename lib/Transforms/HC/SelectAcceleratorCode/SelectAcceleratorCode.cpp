@@ -143,23 +143,7 @@ public:
 
         Modified = eraseDeadAliases_(M) || Modified;
 
-        for (auto&& F : M.functions()) Modified = !alwaysInline_(F) || Modified;
-
         return Modified;
-    }
-
-    bool doFinalization(Module& M) override
-    {
-        const auto It = std::find_if(M.begin(), M.end(), [](Function& F) {
-            return !isInlineViable(F) && !F.isIntrinsic();
-        });
-
-        if (It != M.end()) {
-            M.getContext().diagnose(DiagnosticInfoUnsupported{
-                *It, "The function cannot be inlined."});
-        }
-
-        return false;
     }
 };
 char SelectAcceleratorCode::ID = 0;
