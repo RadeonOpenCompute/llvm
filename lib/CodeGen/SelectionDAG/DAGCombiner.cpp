@@ -7206,11 +7206,14 @@ SDValue DAGCombiner::visitCTPOP(SDNode *N) {
 
 // FIXME: This should be checking for no signed zeros on individual operands, as
 // well as no nans.
-static bool isLegalToCombineMinNumMaxNum(SelectionDAG &DAG, SDValue LHS, SDValue RHS) {
+static bool isLegalToCombineMinNumMaxNum(SelectionDAG &DAG, SDValue LHS,
+                                         SDValue RHS,
+                                         const TargetLowering &TLI) {
   const TargetOptions &Options = DAG.getTarget().Options;
   EVT VT = LHS.getValueType();
 
   return Options.NoSignedZerosFPMath && VT.isFloatingPoint() &&
+         TLI.isProfitableToCombineMinNumMaxNum(VT) &&
          DAG.isKnownNeverNaN(LHS) && DAG.isKnownNeverNaN(RHS);
 }
 
@@ -7480,7 +7483,7 @@ SDValue DAGCombiner::visitSELECT(SDNode *N) {
     // select (fcmp gt x, y), x, y -> fmaxnum x, y
     //
     // This is OK if we don't care what happens if either operand is a NaN.
-    if (N0.hasOneUse() && isLegalToCombineMinNumMaxNum(DAG, N1, N2))
+    if (N0.hasOneUse() && isLegalToCombineMinNumMaxNum(DAG, N1, N2, TLI))
       if (SDValue FMinMax = combineMinNumMaxNum(DL, VT, Cond0, Cond1, N1, N2,
                                                 CC, TLI, DAG))
         return FMinMax;
@@ -7987,7 +7990,8 @@ SDValue DAGCombiner::visitVSELECT(SDNode *N) {
     // NaN.
     //
     EVT VT = N->getValueType(0);
-    if (N0.hasOneUse() && isLegalToCombineMinNumMaxNum(DAG, N0.getOperand(0), N0.getOperand(1))) {
+    if (N0.hasOneUse() && isLegalToCombineMinNumMaxNum(
+                              DAG, N0.getOperand(0), N0.getOperand(1), TLI)) {
       ISD::CondCode CC = cast<CondCodeSDNode>(N0.getOperand(2))->get();
       if (SDValue FMinMax = combineMinNumMaxNum(
             DL, VT, N0.getOperand(0), N0.getOperand(1), N1, N2, CC, TLI, DAG))
@@ -17074,6 +17078,19 @@ SDValue DAGCombiner::visitEXTRACT_SUBVECTOR(SDNode* N) {
   if (TLI.isOperationLegalOrCustomOrPromote(ISD::LOAD, NVT))
     if (SDValue NarrowLoad = narrowExtractedVectorLoad(N, DAG))
       return NarrowLoad;
+
+  // Combine an extract of an extract into a single extract_subvector.
+  // ext (ext X, C), 0 --> ext X, C
+  if (isNullConstant(N->getOperand(1)) &&
+      V.getOpcode() == ISD::EXTRACT_SUBVECTOR && V.hasOneUse() &&
+      isa<ConstantSDNode>(V.getOperand(1))) {
+    if (TLI.isExtractSubvectorCheap(NVT, V.getOperand(0).getValueType(),
+                                    V.getConstantOperandVal(1)) &&
+        TLI.isOperationLegalOrCustom(ISD::EXTRACT_SUBVECTOR, NVT)) {
+      return DAG.getNode(ISD::EXTRACT_SUBVECTOR, SDLoc(N), NVT, V.getOperand(0),
+                         V.getOperand(1));
+    }
+  }
 
   // Combine:
   //    (extract_subvec (concat V1, V2, ...), i)

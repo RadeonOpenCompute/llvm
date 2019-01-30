@@ -24,15 +24,20 @@ MipsLegalizerInfo::MipsLegalizerInfo(const MipsSubtarget &ST) {
   const LLT s64 = LLT::scalar(64);
   const LLT p0 = LLT::pointer(0, 32);
 
-  getActionDefinitionsBuilder(G_ADD)
+  getActionDefinitionsBuilder({G_ADD, G_SUB})
       .legalFor({s32})
       .clampScalar(0, s32, s32);
 
-  getActionDefinitionsBuilder(G_UADDE)
+  getActionDefinitionsBuilder({G_UADDE, G_USUBO, G_USUBE})
       .lowerFor({{s32, s1}});
 
   getActionDefinitionsBuilder({G_LOAD, G_STORE})
       .legalForCartesianProduct({p0, s32}, {p0});
+
+  getActionDefinitionsBuilder({G_ZEXTLOAD, G_SEXTLOAD})
+      .legalForTypesWithMemSize({{s32, p0, 8},
+                                 {s32, p0, 16}})
+      .minScalar(0, s32);
 
   getActionDefinitionsBuilder(G_SELECT)
       .legalForCartesianProduct({p0, s32}, {s32})

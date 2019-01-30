@@ -63,10 +63,10 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
     addRegisterClass(MVT::v8i16, &WebAssembly::V128RegClass);
     addRegisterClass(MVT::v4i32, &WebAssembly::V128RegClass);
     addRegisterClass(MVT::v4f32, &WebAssembly::V128RegClass);
-    if (Subtarget->hasUnimplementedSIMD128()) {
-      addRegisterClass(MVT::v2i64, &WebAssembly::V128RegClass);
-      addRegisterClass(MVT::v2f64, &WebAssembly::V128RegClass);
-    }
+  }
+  if (Subtarget->hasUnimplementedSIMD128()) {
+    addRegisterClass(MVT::v2i64, &WebAssembly::V128RegClass);
+    addRegisterClass(MVT::v2f64, &WebAssembly::V128RegClass);
   }
   // Compute derived properties from the register classes.
   computeRegisterProperties(Subtarget->getRegisterInfo());
@@ -110,56 +110,62 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
     setTruncStoreAction(T, MVT::f16, Expand);
   }
 
-  // Support saturating add for i8x16 and i16x8
-  if (Subtarget->hasSIMD128())
-    for (auto T : {MVT::v16i8, MVT::v8i16})
-      for (auto Op : {ISD::SADDSAT, ISD::UADDSAT})
-        setOperationAction(Op, T, Legal);
-
   // Expand unavailable integer operations.
   for (auto Op :
        {ISD::BSWAP, ISD::SMUL_LOHI, ISD::UMUL_LOHI, ISD::MULHS, ISD::MULHU,
         ISD::SDIVREM, ISD::UDIVREM, ISD::SHL_PARTS, ISD::SRA_PARTS,
         ISD::SRL_PARTS, ISD::ADDC, ISD::ADDE, ISD::SUBC, ISD::SUBE}) {
-    for (auto T : {MVT::i32, MVT::i64}) {
+    for (auto T : {MVT::i32, MVT::i64})
       setOperationAction(Op, T, Expand);
-    }
-    if (Subtarget->hasSIMD128()) {
-      for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32}) {
+    if (Subtarget->hasSIMD128())
+      for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32})
         setOperationAction(Op, T, Expand);
-      }
-      if (Subtarget->hasUnimplementedSIMD128()) {
-        setOperationAction(Op, MVT::v2i64, Expand);
-      }
-    }
-  }
-
-  // There is no i64x2.mul instruction
-  setOperationAction(ISD::MUL, MVT::v2i64, Expand);
-
-  // We have custom shuffle lowering to expose the shuffle mask
-  if (Subtarget->hasSIMD128()) {
-    for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32}) {
-      setOperationAction(ISD::VECTOR_SHUFFLE, T, Custom);
-    }
-    if (Subtarget->hasUnimplementedSIMD128()) {
-      setOperationAction(ISD::VECTOR_SHUFFLE, MVT::v2i64, Custom);
-      setOperationAction(ISD::VECTOR_SHUFFLE, MVT::v2f64, Custom);
-    }
-  }
-
-  // Custom lowering since wasm shifts must have a scalar shift amount
-  if (Subtarget->hasSIMD128()) {
-    for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32})
-      for (auto Op : {ISD::SHL, ISD::SRA, ISD::SRL})
-        setOperationAction(Op, T, Custom);
     if (Subtarget->hasUnimplementedSIMD128())
-      for (auto Op : {ISD::SHL, ISD::SRA, ISD::SRL})
-        setOperationAction(Op, MVT::v2i64, Custom);
+      setOperationAction(Op, MVT::v2i64, Expand);
   }
 
-  // There are no select instructions for vectors
-  if (Subtarget->hasSIMD128())
+  // SIMD-specific configuration
+  if (Subtarget->hasSIMD128()) {
+    // Support saturating add for i8x16 and i16x8
+    for (auto Op : {ISD::SADDSAT, ISD::UADDSAT})
+      for (auto T : {MVT::v16i8, MVT::v8i16})
+        setOperationAction(Op, T, Legal);
+
+    // Custom lower BUILD_VECTORs to minimize number of replace_lanes
+    for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32})
+      setOperationAction(ISD::BUILD_VECTOR, T, Custom);
+    if (Subtarget->hasUnimplementedSIMD128())
+      for (auto T : {MVT::v2i64, MVT::v2f64})
+        setOperationAction(ISD::BUILD_VECTOR, T, Custom);
+
+    // We have custom shuffle lowering to expose the shuffle mask
+    for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32})
+      setOperationAction(ISD::VECTOR_SHUFFLE, T, Custom);
+    if (Subtarget->hasUnimplementedSIMD128())
+      for (auto T: {MVT::v2i64, MVT::v2f64})
+        setOperationAction(ISD::VECTOR_SHUFFLE, T, Custom);
+
+    // Custom lowering since wasm shifts must have a scalar shift amount
+    for (auto Op : {ISD::SHL, ISD::SRA, ISD::SRL}) {
+      for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32})
+        setOperationAction(Op, T, Custom);
+      if (Subtarget->hasUnimplementedSIMD128())
+        setOperationAction(Op, MVT::v2i64, Custom);
+    }
+
+    // Custom lower lane accesses to expand out variable indices
+    for (auto Op : {ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT}) {
+      for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32})
+        setOperationAction(Op, T, Custom);
+      if (Subtarget->hasUnimplementedSIMD128())
+        for (auto T : {MVT::v2i64, MVT::v2f64})
+          setOperationAction(Op, T, Custom);
+    }
+
+    // There is no i64x2.mul instruction
+    setOperationAction(ISD::MUL, MVT::v2i64, Expand);
+
+    // There are no vector select instructions
     for (auto Op : {ISD::VSELECT, ISD::SELECT_CC, ISD::SELECT}) {
       for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32})
         setOperationAction(Op, T, Expand);
@@ -167,6 +173,13 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
         for (auto T : {MVT::v2i64, MVT::v2f64})
           setOperationAction(Op, T, Expand);
     }
+
+    // Expand additional SIMD ops that V8 hasn't implemented yet
+    if (!Subtarget->hasUnimplementedSIMD128()) {
+      setOperationAction(ISD::FSQRT, MVT::v4f32, Expand);
+      setOperationAction(ISD::FDIV, MVT::v4f32, Expand);
+    }
+  }
 
   // As a special case, these operators use the type to mean the type to
   // sign-extend from.
@@ -219,25 +232,8 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
     }
   }
 
-  // Expand additional SIMD ops that V8 hasn't implemented yet
-  if (Subtarget->hasSIMD128() && !Subtarget->hasUnimplementedSIMD128()) {
-    setOperationAction(ISD::FSQRT, MVT::v4f32, Expand);
-    setOperationAction(ISD::FDIV, MVT::v4f32, Expand);
-  }
-
-  // Custom lower lane accesses to expand out variable indices
-  if (Subtarget->hasSIMD128()) {
-    for (auto T : {MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v4f32}) {
-      setOperationAction(ISD::EXTRACT_VECTOR_ELT, T, Custom);
-      setOperationAction(ISD::INSERT_VECTOR_ELT, T, Custom);
-    }
-    if (Subtarget->hasUnimplementedSIMD128()) {
-      for (auto T : {MVT::v2i64, MVT::v2f64}) {
-        setOperationAction(ISD::EXTRACT_VECTOR_ELT, T, Custom);
-        setOperationAction(ISD::INSERT_VECTOR_ELT, T, Custom);
-      }
-    }
-  }
+  // Don't do anything clever with build_pairs
+  setOperationAction(ISD::BUILD_PAIR, MVT::i64, Expand);
 
   // Trap lowers to wasm unreachable
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
@@ -888,15 +884,17 @@ SDValue WebAssemblyTargetLowering::LowerOperation(SDValue Op,
     return LowerFRAMEADDR(Op, DAG);
   case ISD::CopyToReg:
     return LowerCopyToReg(Op, DAG);
-  case ISD::INTRINSIC_WO_CHAIN:
-    return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   case ISD::EXTRACT_VECTOR_ELT:
   case ISD::INSERT_VECTOR_ELT:
     return LowerAccessVectorElement(Op, DAG);
   case ISD::INTRINSIC_VOID:
-    return LowerINTRINSIC_VOID(Op, DAG);
+  case ISD::INTRINSIC_WO_CHAIN:
+  case ISD::INTRINSIC_W_CHAIN:
+    return LowerIntrinsic(Op, DAG);
   case ISD::SIGN_EXTEND_INREG:
     return LowerSIGN_EXTEND_INREG(Op, DAG);
+  case ISD::BUILD_VECTOR:
+    return LowerBUILD_VECTOR(Op, DAG);
   case ISD::VECTOR_SHUFFLE:
     return LowerVECTOR_SHUFFLE(Op, DAG);
   case ISD::SHL:
@@ -1037,17 +1035,28 @@ SDValue WebAssemblyTargetLowering::LowerVASTART(SDValue Op,
                       MachinePointerInfo(SV), 0);
 }
 
-SDValue
-WebAssemblyTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
-                                                   SelectionDAG &DAG) const {
-  unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
+SDValue WebAssemblyTargetLowering::LowerIntrinsic(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  unsigned IntNo;
+  switch (Op.getOpcode()) {
+  case ISD::INTRINSIC_VOID:
+  case ISD::INTRINSIC_W_CHAIN:
+    IntNo = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
+    break;
+  case ISD::INTRINSIC_WO_CHAIN:
+    IntNo = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
+    break;
+  default:
+    llvm_unreachable("Invalid intrinsic");
+  }
   SDLoc DL(Op);
+
   switch (IntNo) {
   default:
     return {}; // Don't custom lower most intrinsics.
 
   case Intrinsic::wasm_lsda: {
-    MachineFunction &MF = DAG.getMachineFunction();
     EVT VT = Op.getValueType();
     const TargetLowering &TLI = DAG.getTargetLoweringInfo();
     MVT PtrVT = TLI.getPointerTy(DAG.getDataLayout());
@@ -1057,43 +1066,26 @@ WebAssemblyTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     return DAG.getNode(WebAssemblyISD::Wrapper, DL, VT,
                        DAG.getMCSymbol(S, PtrVT));
   }
-  }
-}
-
-SDValue
-WebAssemblyTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
-                                               SelectionDAG &DAG) const {
-  MachineFunction &MF = DAG.getMachineFunction();
-  unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
-  SDLoc DL(Op);
-
-  switch (IntNo) {
-  default:
-    return {}; // Don't custom lower most intrinsics.
 
   case Intrinsic::wasm_throw: {
+    // We only support C++ exceptions for now
     int Tag = cast<ConstantSDNode>(Op.getOperand(2).getNode())->getZExtValue();
-    switch (Tag) {
-    case CPP_EXCEPTION: {
-      const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-      MVT PtrVT = TLI.getPointerTy(DAG.getDataLayout());
-      const char *SymName = MF.createExternalSymbolName("__cpp_exception");
-      SDValue SymNode =
-          DAG.getNode(WebAssemblyISD::Wrapper, DL, PtrVT,
-                      DAG.getTargetExternalSymbol(
-                          SymName, PtrVT, WebAssemblyII::MO_SYMBOL_EVENT));
-      return DAG.getNode(WebAssemblyISD::THROW, DL,
-                         MVT::Other, // outchain type
-                         {
-                             Op.getOperand(0), // inchain
-                             SymNode,          // exception symbol
-                             Op.getOperand(3)  // thrown value
-                         });
-    }
-    default:
+    if (Tag != CPP_EXCEPTION)
       llvm_unreachable("Invalid tag!");
-    }
-    break;
+    const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+    MVT PtrVT = TLI.getPointerTy(DAG.getDataLayout());
+    const char *SymName = MF.createExternalSymbolName("__cpp_exception");
+    SDValue SymNode =
+        DAG.getNode(WebAssemblyISD::Wrapper, DL, PtrVT,
+                    DAG.getTargetExternalSymbol(
+                        SymName, PtrVT, WebAssemblyII::MO_SYMBOL_EVENT));
+    return DAG.getNode(WebAssemblyISD::THROW, DL,
+                       MVT::Other, // outchain type
+                       {
+                           Op.getOperand(0), // inchain
+                           SymNode,          // exception symbol
+                           Op.getOperand(3)  // thrown value
+                       });
   }
   }
 }
@@ -1112,6 +1104,107 @@ WebAssemblyTargetLowering::LowerSIGN_EXTEND_INREG(SDValue Op,
     return Op;
   // Otherwise expand
   return SDValue();
+}
+
+SDValue WebAssemblyTargetLowering::LowerBUILD_VECTOR(SDValue Op,
+                                                     SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  const EVT VecT = Op.getValueType();
+  const EVT LaneT = Op.getOperand(0).getValueType();
+  const size_t Lanes = Op.getNumOperands();
+  auto IsConstant = [](const SDValue &V) {
+    return V.getOpcode() == ISD::Constant || V.getOpcode() == ISD::ConstantFP;
+  };
+
+  // Find the most common operand, which is approximately the best to splat
+  using Entry = std::pair<SDValue, size_t>;
+  SmallVector<Entry, 16> ValueCounts;
+  size_t NumConst = 0, NumDynamic = 0;
+  for (const SDValue &Lane : Op->op_values()) {
+    if (Lane.isUndef()) {
+      continue;
+    } else if (IsConstant(Lane)) {
+      NumConst++;
+    } else {
+      NumDynamic++;
+    }
+    auto CountIt = std::find_if(ValueCounts.begin(), ValueCounts.end(),
+                                [&Lane](Entry A) { return A.first == Lane; });
+    if (CountIt == ValueCounts.end()) {
+      ValueCounts.emplace_back(Lane, 1);
+    } else {
+      CountIt->second++;
+    }
+  }
+  auto CommonIt =
+      std::max_element(ValueCounts.begin(), ValueCounts.end(),
+                       [](Entry A, Entry B) { return A.second < B.second; });
+  assert(CommonIt != ValueCounts.end() && "Unexpected all-undef build_vector");
+  SDValue SplatValue = CommonIt->first;
+  size_t NumCommon = CommonIt->second;
+
+  // If v128.const is available, consider using it instead of a splat
+  if (Subtarget->hasUnimplementedSIMD128()) {
+    // {i32,i64,f32,f64}.const opcode, and value
+    const size_t ConstBytes = 1 + std::max(size_t(4), 16 / Lanes);
+    // SIMD prefix and opcode
+    const size_t SplatBytes = 2;
+    const size_t SplatConstBytes = SplatBytes + ConstBytes;
+    // SIMD prefix, opcode, and lane index
+    const size_t ReplaceBytes = 3;
+    const size_t ReplaceConstBytes = ReplaceBytes + ConstBytes;
+    // SIMD prefix, v128.const opcode, and 128-bit value
+    const size_t VecConstBytes = 18;
+    // Initial v128.const and a replace_lane for each non-const operand
+    const size_t ConstInitBytes = VecConstBytes + NumDynamic * ReplaceBytes;
+    // Initial splat and all necessary replace_lanes
+    const size_t SplatInitBytes =
+        IsConstant(SplatValue)
+            // Initial constant splat
+            ? (SplatConstBytes +
+               // Constant replace_lanes
+               (NumConst - NumCommon) * ReplaceConstBytes +
+               // Dynamic replace_lanes
+               (NumDynamic * ReplaceBytes))
+            // Initial dynamic splat
+            : (SplatBytes +
+               // Constant replace_lanes
+               (NumConst * ReplaceConstBytes) +
+               // Dynamic replace_lanes
+               (NumDynamic - NumCommon) * ReplaceBytes);
+    if (ConstInitBytes < SplatInitBytes) {
+      // Create build_vector that will lower to initial v128.const
+      SmallVector<SDValue, 16> ConstLanes;
+      for (const SDValue &Lane : Op->op_values()) {
+        if (IsConstant(Lane)) {
+          ConstLanes.push_back(Lane);
+        } else if (LaneT.isFloatingPoint()) {
+          ConstLanes.push_back(DAG.getConstantFP(0, DL, LaneT));
+        } else {
+          ConstLanes.push_back(DAG.getConstant(0, DL, LaneT));
+        }
+      }
+      SDValue Result = DAG.getBuildVector(VecT, DL, ConstLanes);
+      // Add replace_lane instructions for non-const lanes
+      for (size_t I = 0; I < Lanes; ++I) {
+        const SDValue &Lane = Op->getOperand(I);
+        if (!Lane.isUndef() && !IsConstant(Lane))
+          Result = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VecT, Result, Lane,
+                               DAG.getConstant(I, DL, MVT::i32));
+      }
+      return Result;
+    }
+  }
+  // Use a splat for the initial vector
+  SDValue Result = DAG.getSplatBuildVector(VecT, DL, SplatValue);
+  // Add replace_lane instructions for other values
+  for (size_t I = 0; I < Lanes; ++I) {
+    const SDValue &Lane = Op->getOperand(I);
+    if (Lane != SplatValue)
+      Result = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VecT, Result, Lane,
+                           DAG.getConstant(I, DL, MVT::i32));
+  }
+  return Result;
 }
 
 SDValue

@@ -239,7 +239,7 @@ private:
       if (!LiveLoopBlocks.count(From))
         return false;
       BasicBlock *TheOnlySucc = getOnlyLiveSuccessor(From);
-      return !TheOnlySucc || TheOnlySucc == To;
+      return !TheOnlySucc || TheOnlySucc == To || LI.getLoopFor(From) != &L;
     };
 
     // The loop will not be destroyed if its latch is live.
@@ -541,7 +541,7 @@ public:
 
 #ifndef NDEBUG
     // Make sure that we have preserved all data structures after the transform.
-    DT.verify();
+    assert(DT.verify() && "DT broken after transform!");
     assert(DT.isReachableFromEntry(L.getHeader()));
     LI.verify(DT);
 #endif

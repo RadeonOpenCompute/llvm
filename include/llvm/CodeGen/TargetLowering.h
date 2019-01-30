@@ -1762,6 +1762,8 @@ public:
       Action != TypeSplitVector;
   }
 
+  virtual bool isProfitableToCombineMinNumMaxNum(EVT VT) const { return true; }
+
   /// Return true if a select of constants (select Cond, C1, C2) should be
   /// transformed into simple math ops with the condition value. For example:
   /// select Cond, C1, C1-1 --> add (zext Cond), C1-1
@@ -3840,8 +3842,7 @@ public:
 
   /// Method for building the DAG expansion of ISD::SMULFIX. This method accepts
   /// integers as its arguments.
-  SDValue getExpandedFixedPointMultiplication(SDNode *Node,
-                                              SelectionDAG &DAG) const;
+  SDValue expandFixedPointMul(SDNode *Node, SelectionDAG &DAG) const;
 
   //===--------------------------------------------------------------------===//
   // Instruction Emitting Hooks

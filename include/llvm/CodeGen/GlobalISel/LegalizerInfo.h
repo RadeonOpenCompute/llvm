@@ -204,6 +204,8 @@ LegalityPredicate typePairAndMemSizeInSet(
     std::initializer_list<TypePairAndMemSize> TypesAndMemSizeInit);
 /// True iff the specified type index is a scalar.
 LegalityPredicate isScalar(unsigned TypeIdx);
+/// True iff the specified type index is a vector.
+LegalityPredicate isVector(unsigned TypeIdx);
 /// True iff the specified type index is a pointer (with any address space).
 LegalityPredicate isPointer(unsigned TypeIdx);
 /// True iff the specified type index is a pointer with the specified address
@@ -240,6 +242,8 @@ LegalizeMutation widenScalarToNextPow2(unsigned TypeIdx, unsigned Min = 0);
 /// Add more elements to the type for the given type index to the next power of
 /// 2.
 LegalizeMutation moreElementsToNextPow2(unsigned TypeIdx, unsigned Min = 0);
+/// Break up the vector type for the given type index into the element type.
+LegalizeMutation scalarize(unsigned TypeIdx);
 } // end namespace LegalizeMutations
 
 /// A single rule in a legalizer info ruleset.
@@ -602,6 +606,11 @@ public:
     return actionForCartesianProduct(LegalizeAction::Custom, Types0, Types1);
   }
 
+  /// Unconditionally custom lower.
+  LegalizeRuleSet &custom() {
+    return customIf(always);
+  }
+
   /// Widen the scalar to the next power of two that is at least MinSize.
   /// No effect if the type is not a scalar or is a power of two.
   LegalizeRuleSet &widenScalarToNextPow2(unsigned TypeIdx,
@@ -615,6 +624,12 @@ public:
     using namespace LegalityPredicates;
     return actionIf(LegalizeAction::NarrowScalar, isScalar(typeIdx(TypeIdx)),
                     Mutation);
+  }
+
+  LegalizeRuleSet &scalarize(unsigned TypeIdx) {
+    using namespace LegalityPredicates;
+    return actionIf(LegalizeAction::FewerElements, isVector(typeIdx(TypeIdx)),
+                    LegalizeMutations::scalarize(TypeIdx));
   }
 
   /// Ensure the scalar is at least as wide as Ty.

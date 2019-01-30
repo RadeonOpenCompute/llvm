@@ -16,6 +16,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugInfo.h"
@@ -373,6 +374,25 @@ MachineInstrBuilder MachineIRBuilder::buildSExt(const DstOp &Res,
 MachineInstrBuilder MachineIRBuilder::buildZExt(const DstOp &Res,
                                                 const SrcOp &Op) {
   return buildInstr(TargetOpcode::G_ZEXT, Res, Op);
+}
+
+unsigned MachineIRBuilder::getBoolExtOp(bool IsVec, bool IsFP) const {
+  const auto *TLI = getMF().getSubtarget().getTargetLowering();
+  switch (TLI->getBooleanContents(IsVec, IsFP)) {
+  case TargetLoweringBase::ZeroOrNegativeOneBooleanContent:
+    return TargetOpcode::G_SEXT;
+  case TargetLoweringBase::ZeroOrOneBooleanContent:
+    return TargetOpcode::G_ZEXT;
+  default:
+    return TargetOpcode::G_ANYEXT;
+  }
+}
+
+MachineInstrBuilder MachineIRBuilder::buildBoolExt(const DstOp &Res,
+                                                   const SrcOp &Op,
+                                                   bool IsFP) {
+  unsigned ExtOp = getBoolExtOp(getMRI()->getType(Op.getReg()).isVector(), IsFP);
+  return buildInstr(ExtOp, Res, Op);
 }
 
 MachineInstrBuilder MachineIRBuilder::buildExtOrTrunc(unsigned ExtOpc,
@@ -974,7 +994,7 @@ MachineInstrBuilder MachineIRBuilder::buildInstr(unsigned Opc,
            "type mismatch in input list");
     assert(SrcOps.size() * SrcOps[0].getLLTTy(*getMRI()).getSizeInBits() ==
                DstOps[0].getLLTTy(*getMRI()).getSizeInBits() &&
-           "input scalars do not exactly cover the outpur vector register");
+           "input scalars do not exactly cover the output vector register");
     break;
   }
   case TargetOpcode::G_BUILD_VECTOR_TRUNC: {
@@ -1007,7 +1027,7 @@ MachineInstrBuilder MachineIRBuilder::buildInstr(unsigned Opc,
            "type mismatch in input list");
     assert(SrcOps.size() * SrcOps[0].getLLTTy(*getMRI()).getSizeInBits() ==
                DstOps[0].getLLTTy(*getMRI()).getSizeInBits() &&
-           "input vectors do not exactly cover the outpur vector register");
+           "input vectors do not exactly cover the output vector register");
     break;
   }
   case TargetOpcode::G_UADDE: {

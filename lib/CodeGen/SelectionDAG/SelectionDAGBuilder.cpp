@@ -1456,6 +1456,36 @@ void SelectionDAGBuilder::visitCleanupPad(const CleanupPadInst &CPI) {
   }
 }
 
+// For wasm, there's alwyas a single catch pad attached to a catchswitch, and
+// the control flow always stops at the single catch pad, as it does for a
+// cleanup pad. In case the exception caught is not of the types the catch pad
+// catches, it will be rethrown by a rethrow.
+static void findWasmUnwindDestinations(
+    FunctionLoweringInfo &FuncInfo, const BasicBlock *EHPadBB,
+    BranchProbability Prob,
+    SmallVectorImpl<std::pair<MachineBasicBlock *, BranchProbability>>
+        &UnwindDests) {
+  while (EHPadBB) {
+    const Instruction *Pad = EHPadBB->getFirstNonPHI();
+    if (isa<CleanupPadInst>(Pad)) {
+      // Stop on cleanup pads.
+      UnwindDests.emplace_back(FuncInfo.MBBMap[EHPadBB], Prob);
+      UnwindDests.back().first->setIsEHScopeEntry();
+      break;
+    } else if (auto *CatchSwitch = dyn_cast<CatchSwitchInst>(Pad)) {
+      // Add the catchpad handlers to the possible destinations. We don't
+      // continue to the unwind destination of the catchswitch for wasm.
+      for (const BasicBlock *CatchPadBB : CatchSwitch->handlers()) {
+        UnwindDests.emplace_back(FuncInfo.MBBMap[CatchPadBB], Prob);
+        UnwindDests.back().first->setIsEHScopeEntry();
+      }
+      break;
+    } else {
+      continue;
+    }
+  }
+}
+
 /// When an invoke or a cleanupret unwinds to the next EH pad, there are
 /// many places it could ultimately go. In the IR, we have a single unwind
 /// destination, but in the machine CFG, we enumerate all the possible blocks.
@@ -1476,6 +1506,11 @@ static void findUnwindDestinations(
   bool IsWasmCXX = Personality == EHPersonality::Wasm_CXX;
   bool IsSEH = isAsynchronousEHPersonality(Personality);
 
+  if (IsWasmCXX) {
+    findWasmUnwindDestinations(FuncInfo, EHPadBB, Prob, UnwindDests);
+    return;
+  }
+
   while (EHPadBB) {
     const Instruction *Pad = EHPadBB->getFirstNonPHI();
     BasicBlock *NewEHPadBB = nullptr;
@@ -1488,8 +1523,7 @@ static void findUnwindDestinations(
       // personalities.
       UnwindDests.emplace_back(FuncInfo.MBBMap[EHPadBB], Prob);
       UnwindDests.back().first->setIsEHScopeEntry();
-      if (!IsWasmCXX)
-        UnwindDests.back().first->setIsEHFuncletEntry();
+      UnwindDests.back().first->setIsEHFuncletEntry();
       break;
     } else if (auto *CatchSwitch = dyn_cast<CatchSwitchInst>(Pad)) {
       // Add the catchpad handlers to the possible destinations.
@@ -5320,6 +5354,21 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       return nullptr;
     }
 
+    // If the Value is a frame index, we can create a FrameIndex debug value
+    // without relying on the DAG at all.
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(V)) {
+      auto SI = FuncInfo.StaticAllocaMap.find(AI);
+      if (SI != FuncInfo.StaticAllocaMap.end()) {
+        auto SDV =
+            DAG.getFrameIndexDbgValue(Variable, Expression, SI->second,
+                                      /*IsIndirect*/ false, dl, SDNodeOrder);
+        // Do not attach the SDNodeDbgValue to an SDNode: this variable location
+        // is still available even if the SDNode gets optimized out.
+        DAG.AddDbgValue(SDV, nullptr, false);
+        return nullptr;
+      }
+    }
+
     // Do not use getValue() in here; we don't want to generate code at
     // this point if it hasn't been done yet.
     SDValue N = NodeMap[V];
@@ -6987,9 +7036,6 @@ void SelectionDAGBuilder::visitCall(const CallInst &I) {
     return;
   }
 
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-  computeUsesVAFloatArgument(I, MMI);
-
   const char *RenameFn = nullptr;
   if (Function *F = I.getCalledFunction()) {
     if (F->isDeclaration()) {
@@ -7345,6 +7391,10 @@ static void GetRegistersForValue(SelectionDAG &DAG, const SDLoc &DL,
   SmallVector<unsigned, 4> Regs;
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
 
+  // No work to do for memory operations.
+  if (OpInfo.ConstraintType == TargetLowering::C_Memory)
+    return;
+
   // If this is a constraint for a single physreg, or a constraint for a
   // register class, find it.
   unsigned AssignedReg;
@@ -7501,9 +7551,9 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   TargetLowering::AsmOperandInfoVector TargetConstraints = TLI.ParseConstraints(
       DAG.getDataLayout(), DAG.getSubtarget().getRegisterInfo(), CS);
 
-  bool hasMemory = false;
-
-  // Remember the HasSideEffect, AlignStack, AsmDialect, MayLoad and MayStore
+  // First Pass: Calculate HasSideEffects and ExtraFlags (AlignStack,
+  // AsmDialect, MayLoad, MayStore).
+  bool HasSideEffect = IA->hasSideEffects();
   ExtraFlags ExtraInfo(CS);
 
   unsigned ArgNo = 0;   // ArgNo - The argument of the CallInst.
@@ -7546,8 +7596,8 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
       OpInfo.ConstraintVT = MVT::Other;
     }
 
-    if (!hasMemory)
-      hasMemory = OpInfo.hasMemory(TLI);
+    if (!HasSideEffect)
+      HasSideEffect = OpInfo.hasMemory(TLI);
 
     // Determine if this InlineAsm MayLoad or MayStore based on the constraints.
     // FIXME: Could we compute this on OpInfo rather than T?
@@ -7558,14 +7608,9 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
     ExtraInfo.update(T);
   }
 
-  SDValue Chain, Flag;
-
   // We won't need to flush pending loads if this asm doesn't touch
   // memory and is nonvolatile.
-  if (hasMemory || IA->hasSideEffects())
-    Chain = getRoot();
-  else
-    Chain = DAG.getRoot();
+  SDValue Flag, Chain = (HasSideEffect) ? getRoot() : DAG.getRoot();
 
   // Second pass over the constraints: compute which constraint option to use.
   for (SDISelAsmOperandInfo &OpInfo : ConstraintOperands) {
@@ -7605,19 +7650,6 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
 
   }
 
-  // Third pass - Loop over all of the operands, assigning virtual or physregs
-  // to register class operands.
-  for (SDISelAsmOperandInfo &OpInfo : ConstraintOperands) {
-    SDISelAsmOperandInfo &RefOpInfo =
-        OpInfo.isMatchingInputConstraint()
-            ? ConstraintOperands[OpInfo.getMatchedOperand()]
-            : OpInfo;
-
-    if (RefOpInfo.ConstraintType == TargetLowering::C_Register ||
-        RefOpInfo.ConstraintType == TargetLowering::C_RegisterClass)
-      GetRegistersForValue(DAG, getCurSDLoc(), OpInfo, RefOpInfo);
-  }
-
   // AsmNodeOperands - The operands for the ISD::INLINEASM node.
   std::vector<SDValue> AsmNodeOperands;
   AsmNodeOperands.push_back(SDValue());  // reserve space for input chain
@@ -7635,7 +7667,16 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   AsmNodeOperands.push_back(DAG.getTargetConstant(
       ExtraInfo.get(), getCurSDLoc(), TLI.getPointerTy(DAG.getDataLayout())));
 
+  // Third pass: Loop over operands to prepare DAG-level operands.. As part of
+  // this, assign virtual and physical registers for inputs and otput.
   for (SDISelAsmOperandInfo &OpInfo : ConstraintOperands) {
+    // Assign Registers.
+    SDISelAsmOperandInfo &RefOpInfo =
+        OpInfo.isMatchingInputConstraint()
+            ? ConstraintOperands[OpInfo.getMatchedOperand()]
+            : OpInfo;
+    GetRegistersForValue(DAG, getCurSDLoc(), OpInfo, RefOpInfo);
+
     switch (OpInfo.Type) {
     case InlineAsm::isOutput:
       if (OpInfo.ConstraintType != TargetLowering::C_RegisterClass &&
@@ -7839,15 +7880,11 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   SmallVector<SDValue, 8> OutChains;
 
   llvm::Type *CSResultType = CS.getType();
-  unsigned NumReturns = 0;
   ArrayRef<Type *> ResultTypes;
-  if (StructType *StructResult = dyn_cast<StructType>(CSResultType)) {
-    NumReturns = StructResult->getNumElements();
+  if (StructType *StructResult = dyn_cast<StructType>(CSResultType))
     ResultTypes = StructResult->elements();
-  } else if (!CSResultType->isVoidTy()) {
-    NumReturns = 1;
+  else if (!CSResultType->isVoidTy())
     ResultTypes = makeArrayRef(CSResultType);
-  }
 
   auto CurResultType = ResultTypes.begin();
   auto handleRegAssign = [&](SDValue V) {
@@ -7912,7 +7949,7 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   if (!ResultValues.empty()) {
     assert(CurResultType == ResultTypes.end() &&
            "Mismatch in number of ResultTypes");
-    assert(ResultValues.size() == NumReturns &&
+    assert(ResultValues.size() == ResultTypes.size() &&
            "Mismatch in number of output operands in asm result");
 
     SDValue V = DAG.getNode(ISD::MERGE_VALUES, getCurSDLoc(),
@@ -7925,8 +7962,7 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
     Chain = DAG.getNode(ISD::TokenFactor, getCurSDLoc(), MVT::Other, OutChains);
 
   // Only Update Root if inline assembly has a memory effect.
-  if (ResultValues.empty() || IA->hasSideEffects() || hasMemory ||
-      !OutChains.empty())
+  if (ResultValues.empty() || HasSideEffect || !OutChains.empty())
     DAG.setRoot(Chain);
 }
 
