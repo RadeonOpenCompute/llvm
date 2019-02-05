@@ -104,21 +104,6 @@ class SelectAcceleratorCode : public ModulePass {
             [&]() { return M.alias_end(); },
             [](const Constant& K) { return !K.isConstantUsed(); });
     }
-
-    static
-    bool alwaysInline_(Function &F)
-    {
-        if (!F.hasFnAttribute(Attribute::AlwaysInline)) {
-            if (F.hasFnAttribute(Attribute::NoInline)) {
-                F.removeFnAttr(Attribute::NoInline);
-            }
-            F.addFnAttr(Attribute::AlwaysInline);
-
-            return false;
-        }
-
-        return true;
-    }
 public:
     static char ID;
     SelectAcceleratorCode() : ModulePass{ID} {}
@@ -130,7 +115,7 @@ public:
         // invalidated appropriately by other passes.
         for (auto&& F : M.functions()) {
             if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
-                 auto Tmp = HCCallees_.insert(M.getFunction(F.getName()));
+                auto Tmp = HCCallees_.insert(M.getFunction(F.getName()));
                 if (Tmp.second) findAllHCCallees_(F, M);
             }
         }
