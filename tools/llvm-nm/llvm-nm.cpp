@@ -935,6 +935,7 @@ static char getSymbolNMTypeChar(ELFObjectFileBase &Obj,
     return StringSwitch<char>(*Name)
         .StartsWith(".debug", 'N')
         .StartsWith(".note", 'n')
+        .StartsWith(".comment", 'n')
         .Default('?');
   }
 
@@ -1189,10 +1190,8 @@ dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
       NMSymbol S = {};
       S.Size = 0;
       S.Address = 0;
-      if (PrintSize) {
-        if (isa<ELFObjectFileBase>(&Obj))
-          S.Size = ELFSymbolRef(Sym).getSize();
-      }
+      if (isa<ELFObjectFileBase>(&Obj))
+        S.Size = ELFSymbolRef(Sym).getSize();
       if (PrintAddress && isa<ObjectFile>(Obj)) {
         SymbolRef SymRef(Sym);
         Expected<uint64_t> AddressOrErr = SymRef.getAddress();

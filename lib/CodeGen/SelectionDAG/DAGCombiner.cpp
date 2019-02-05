@@ -2115,6 +2115,18 @@ SDValue DAGCombiner::visitADD(SDNode *N) {
   if (N0.getOpcode() == ISD::SUB && N1 == N0.getOperand(1))
     return N0.getOperand(0);
 
+  // fold ((A-B)+(C-A)) -> (C-B)
+  if (N0.getOpcode() == ISD::SUB && N1.getOpcode() == ISD::SUB &&
+      N0.getOperand(0) == N1.getOperand(1))
+    return DAG.getNode(ISD::SUB, DL, VT, N1.getOperand(0),
+                       N0.getOperand(1));
+
+  // fold ((A-B)+(B-C)) -> (A-C)
+  if (N0.getOpcode() == ISD::SUB && N1.getOpcode() == ISD::SUB &&
+      N0.getOperand(1) == N1.getOperand(0))
+    return DAG.getNode(ISD::SUB, DL, VT, N0.getOperand(0),
+                       N1.getOperand(1));
+
   // fold (A+(B-(A+C))) to (B-C)
   if (N1.getOpcode() == ISD::SUB && N1.getOperand(1).getOpcode() == ISD::ADD &&
       N0 == N1.getOperand(1).getOperand(0))
@@ -2256,6 +2268,23 @@ static SDValue getAsCarry(const TargetLowering &TLI, SDValue V) {
   return SDValue();
 }
 
+/// Given the operands of an add/sub operation, see if the 2nd operand is a
+/// masked 0/1 whose source operand is actually known to be 0/-1. If so, invert
+/// the opcode and bypass the mask operation.
+static SDValue foldAddSubMasked1(bool IsAdd, SDValue N0, SDValue N1,
+                                 SelectionDAG &DAG, const SDLoc &DL) {
+  if (N1.getOpcode() != ISD::AND || !isOneOrOneSplat(N1->getOperand(1)))
+    return SDValue();
+
+  EVT VT = N0.getValueType();
+  if (DAG.ComputeNumSignBits(N1.getOperand(0)) != VT.getScalarSizeInBits())
+    return SDValue();
+
+  // add N0, (and (AssertSext X, i1), 1) --> sub N0, X
+  // sub N0, (and (AssertSext X, i1), 1) --> add N0, X
+  return DAG.getNode(IsAdd ? ISD::SUB : ISD::ADD, DL, VT, N0, N1.getOperand(0));
+}
+
 SDValue DAGCombiner::visitADDLike(SDValue N0, SDValue N1, SDNode *LocReference) {
   EVT VT = N0.getValueType();
   SDLoc DL(LocReference);
@@ -2268,16 +2297,8 @@ SDValue DAGCombiner::visitADDLike(SDValue N0, SDValue N1, SDNode *LocReference) 
                                    N1.getOperand(0).getOperand(1),
                                    N1.getOperand(1)));
 
-  if (N1.getOpcode() == ISD::AND) {
-    SDValue AndOp0 = N1.getOperand(0);
-    unsigned NumSignBits = DAG.ComputeNumSignBits(AndOp0);
-    unsigned DestBits = VT.getScalarSizeInBits();
-
-    // (add z, (and (sbbl x, x), 1)) -> (sub z, (sbbl x, x))
-    // and similar xforms where the inner op is either ~0 or 0.
-    if (NumSignBits == DestBits && isOneOrOneSplat(N1->getOperand(1)))
-      return DAG.getNode(ISD::SUB, DL, VT, N0, AndOp0);
-  }
+  if (SDValue V = foldAddSubMasked1(true, N0, N1, DAG, DL))
+    return V;
 
   // add (sext i1), X -> sub X, (zext i1)
   if (N0.getOpcode() == ISD::SIGN_EXTEND &&
@@ -2725,6 +2746,9 @@ SDValue DAGCombiner::visitSUB(SDNode *N) {
     return V;
 
   if (SDValue V = foldAddSubOfSignBit(N, DAG))
+    return V;
+
+  if (SDValue V = foldAddSubMasked1(false, N0, N1, DAG, SDLoc(N)))
     return V;
 
   // fold Y = sra (X, size(X)-1); sub (xor (X, Y), Y) -> (abs X)
@@ -8390,6 +8414,9 @@ SDValue DAGCombiner::CombineExtLoad(SDNode *N) {
 SDValue DAGCombiner::CombineZExtLogicopShiftLoad(SDNode *N) {
   assert(N->getOpcode() == ISD::ZERO_EXTEND);
   EVT VT = N->getValueType(0);
+  EVT OrigVT = N->getOperand(0).getValueType();
+  if (TLI.isZExtFree(OrigVT, VT))
+    return SDValue();
 
   // and/or/xor
   SDValue N0 = N->getOperand(0);
@@ -8453,6 +8480,10 @@ SDValue DAGCombiner::CombineZExtLogicopShiftLoad(SDNode *N) {
                                 Load->getValueType(0), ExtLoad);
     CombineTo(Load, Trunc, ExtLoad.getValue(1));
   }
+
+  // N0 is dead at this point.
+  recursivelyDeleteUnusedNodes(N0.getNode());
+
   return SDValue(N,0); // Return N so it doesn't get rechecked!
 }
 
@@ -16331,7 +16362,7 @@ SDValue DAGCombiner::reduceBuildVecToShuffle(SDNode *N) {
       return SDValue();
     SDValue ExtractedFromVec = Op.getOperand(0);
 
-    APInt ExtractIdx = cast<ConstantSDNode>(Op.getOperand(1))->getAPIntValue();
+    const APInt &ExtractIdx = Op.getConstantOperandAPInt(1);
     if (ExtractIdx.uge(ExtractedFromVec.getValueType().getVectorNumElements()))
       return SDValue();
 

@@ -624,6 +624,7 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::SSUBSAT, VT, Expand);
     setOperationAction(ISD::USUBSAT, VT, Expand);
     setOperationAction(ISD::SMULFIX, VT, Expand);
+    setOperationAction(ISD::UMULFIX, VT, Expand);
 
     // Overflow operations default to expand
     setOperationAction(ISD::SADDO, VT, Expand);
@@ -1587,8 +1588,8 @@ Value *TargetLoweringBase::getSafeStackPointerLocation(IRBuilder<> &IRB) const {
   // thread's unsafe stack pointer.
   Module *M = IRB.GetInsertBlock()->getParent()->getParent();
   Type *StackPtrTy = Type::getInt8PtrTy(M->getContext());
-  Value *Fn = M->getOrInsertFunction("__safestack_pointer_address",
-                                     StackPtrTy->getPointerTo(0));
+  FunctionCallee Fn = M->getOrInsertFunction("__safestack_pointer_address",
+                                             StackPtrTy->getPointerTo(0));
   return IRB.CreateCall(Fn);
 }
 
@@ -1663,7 +1664,7 @@ Value *TargetLoweringBase::getSDagStackGuard(const Module &M) const {
   return M.getNamedValue("__stack_chk_guard");
 }
 
-Value *TargetLoweringBase::getSSPStackGuardCheck(const Module &M) const {
+Function *TargetLoweringBase::getSSPStackGuardCheck(const Module &M) const {
   return nullptr;
 }
 

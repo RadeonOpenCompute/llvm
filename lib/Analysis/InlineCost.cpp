@@ -50,19 +50,19 @@ static cl::opt<int> InlineThreshold(
     cl::desc("Control the amount of inlining to perform (default = 225)"));
 
 static cl::opt<int> HintThreshold(
-    "inlinehint-threshold", cl::Hidden, cl::init(325),
+    "inlinehint-threshold", cl::Hidden, cl::init(325), cl::ZeroOrMore, 
     cl::desc("Threshold for inlining functions with inline hint"));
 
 static cl::opt<int>
     ColdCallSiteThreshold("inline-cold-callsite-threshold", cl::Hidden,
-                          cl::init(45),
+                          cl::init(45), cl::ZeroOrMore,
                           cl::desc("Threshold for inlining cold callsites"));
 
 // We introduce this threshold to help performance of instrumentation based
 // PGO before we actually hook up inliner with analysis passes such as BPI and
 // BFI.
 static cl::opt<int> ColdThreshold(
-    "inlinecold-threshold", cl::Hidden, cl::init(45),
+    "inlinecold-threshold", cl::Hidden, cl::init(45), cl::ZeroOrMore, 
     cl::desc("Threshold for inlining functions with cold attribute"));
 
 static cl::opt<int>
@@ -87,7 +87,7 @@ static cl::opt<int> HotCallSiteRelFreq(
              "profile information."));
 
 static cl::opt<bool> OptComputeFullInlineCost(
-    "inline-cost-full", cl::Hidden, cl::init(false),
+    "inline-cost-full", cl::Hidden, cl::init(false), cl::ZeroOrMore,
     cl::desc("Compute the full inline cost of a call site even when the cost "
              "exceeds the threshold."));
 
@@ -2022,9 +2022,10 @@ InlineCost llvm::getInlineCost(
   // Calls to functions with always-inline attributes should be inlined
   // whenever possible.
   if (CS.hasFnAttr(Attribute::AlwaysInline)) {
-    if (isInlineViable(*Callee))
+    auto IsViable = isInlineViable(*Callee);
+    if (IsViable)
       return llvm::InlineCost::getAlways("always inline attribute");
-    return llvm::InlineCost::getNever("inapplicable always inline attribute");
+    return llvm::InlineCost::getNever(IsViable.message);
   }
 
   // Never inline functions with conflicting attributes (unless callee has
@@ -2072,13 +2073,16 @@ InlineCost llvm::getInlineCost(
   return llvm::InlineCost::get(CA.getCost(), CA.getThreshold());
 }
 
-bool llvm::isInlineViable(Function &F) {
+InlineResult llvm::isInlineViable(Function &F) {
   bool ReturnsTwice = F.hasFnAttribute(Attribute::ReturnsTwice);
   for (Function::iterator BI = F.begin(), BE = F.end(); BI != BE; ++BI) {
     // Disallow inlining of functions which contain indirect branches or
     // blockaddresses.
-    if (isa<IndirectBrInst>(BI->getTerminator()) || BI->hasAddressTaken())
-      return false;
+    if (isa<IndirectBrInst>(BI->getTerminator()))
+      return "contains indirect branches";
+
+    if (BI->hasAddressTaken())
+      return "uses block address";
 
     for (auto &II : *BI) {
       CallSite CS(&II);
@@ -2087,13 +2091,13 @@ bool llvm::isInlineViable(Function &F) {
 
       // Disallow recursive calls.
       if (&F == CS.getCalledFunction())
-        return false;
+        return "recursive call";
 
       // Disallow calls which expose returns-twice to a function not previously
       // attributed as such.
       if (!ReturnsTwice && CS.isCall() &&
           cast<CallInst>(CS.getInstruction())->canReturnTwice())
-        return false;
+        return "exposes returns-twice attribute";
 
       if (CS.getCalledFunction())
         switch (CS.getCalledFunction()->getIntrinsicID()) {
@@ -2102,12 +2106,14 @@ bool llvm::isInlineViable(Function &F) {
         // Disallow inlining of @llvm.icall.branch.funnel because current
         // backend can't separate call targets from call arguments.
         case llvm::Intrinsic::icall_branch_funnel:
+          return "disallowed inlining of @llvm.icall.branch.funnel";
         // Disallow inlining functions that call @llvm.localescape. Doing this
         // correctly would require major changes to the inliner.
         case llvm::Intrinsic::localescape:
+          return "disallowed inlining of @llvm.localescape";
         // Disallow inlining of functions that initialize VarArgs with va_start.
         case llvm::Intrinsic::vastart:
-          return false;
+          return "contains VarArgs initialized with va_start";
         }
     }
   }
