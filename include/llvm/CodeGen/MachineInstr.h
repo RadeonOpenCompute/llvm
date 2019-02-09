@@ -1011,7 +1011,10 @@ public:
   }
   bool isKill() const { return getOpcode() == TargetOpcode::KILL; }
   bool isImplicitDef() const { return getOpcode()==TargetOpcode::IMPLICIT_DEF; }
-  bool isInlineAsm() const { return getOpcode() == TargetOpcode::INLINEASM; }
+  bool isInlineAsm() const {
+    return getOpcode() == TargetOpcode::INLINEASM ||
+           getOpcode() == TargetOpcode::INLINEASM_BR;
+  }
 
   bool isMSInlineAsm() const {
     return isInlineAsm() && getInlineAsmDialect() == InlineAsm::AD_Intel;
@@ -1537,6 +1540,8 @@ public:
   /// should be used when merging two MachineInstrs into one. This routine does
   /// not modify the MIFlags of this MachineInstr.
   uint16_t mergeFlagsWith(const MachineInstr& Other) const;
+
+  static uint16_t copyFlagsFromInstruction(const Instruction &I);
 
   /// Copy all flags to MachineInst MIFlags
   void copyIRFlags(const Instruction &I);

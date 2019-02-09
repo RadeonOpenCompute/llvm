@@ -1067,6 +1067,7 @@ void AsmPrinter::EmitFunctionBody() {
         OutStreamer->EmitLabel(MI.getOperand(0).getMCSymbol());
         break;
       case TargetOpcode::INLINEASM:
+      case TargetOpcode::INLINEASM_BR:
         EmitInlineAsm(&MI);
         break;
       case TargetOpcode::DBG_VALUE:
@@ -1867,8 +1868,7 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
 }
 
 /// EmitLLVMUsedList - For targets that define a MAI::UsedDirective, mark each
-/// global in the specified llvm.used list for which emitUsedDirectiveFor
-/// is true, as being used with this directive.
+/// global in the specified llvm.used list.
 void AsmPrinter::EmitLLVMUsedList(const ConstantArray *InitList) {
   // Should be an array of 'i8*'.
   for (unsigned i = 0, e = InitList->getNumOperands(); i != e; ++i) {
