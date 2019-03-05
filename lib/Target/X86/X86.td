@@ -453,16 +453,16 @@ include "X86ScheduleBtVer2.td"
 include "X86SchedSkylakeClient.td"
 include "X86SchedSkylakeServer.td"
 
-def ProcIntelAtom : SubtargetFeature<"atom", "X86ProcFamily", "IntelAtom",
-                    "Intel Atom processors">;
-def ProcIntelSLM  : SubtargetFeature<"slm", "X86ProcFamily", "IntelSLM",
-                    "Intel Silvermont processors">;
-def ProcIntelGLM  : SubtargetFeature<"glm", "X86ProcFamily", "IntelGLM",
-                    "Intel Goldmont processors">;
-def ProcIntelGLP  : SubtargetFeature<"glp", "X86ProcFamily", "IntelGLP",
-                    "Intel Goldmont Plus processors">;
-def ProcIntelTRM  : SubtargetFeature<"tremont", "X86ProcFamily", "IntelTRM",
-                    "Intel Tremont processors">;
+// Bonnell
+def ProcIntelAtom : SubtargetFeature<"", "X86ProcFamily", "IntelAtom", "">;
+// Silvermont
+def ProcIntelSLM  : SubtargetFeature<"", "X86ProcFamily", "IntelSLM", "">;
+// Goldmont
+def ProcIntelGLM  : SubtargetFeature<"", "X86ProcFamily", "IntelGLM", "">;
+// Goldmont Plus
+def ProcIntelGLP  : SubtargetFeature<"", "X86ProcFamily", "IntelGLP", "">;
+// Tremont
+def ProcIntelTRM  : SubtargetFeature<"", "X86ProcFamily", "IntelTRM", "">;
 
 class Proc<string Name, list<SubtargetFeature> Features>
  : ProcessorModel<Name, GenericModel, Features>;
@@ -733,7 +733,6 @@ def SNBFeatures : ProcessorFeatures<[], [
   FeatureSlow3OpsLEA,
   FeatureFastScalarFSQRT,
   FeatureFastSHLDRotate,
-  FeatureSlowIncDec,
   FeatureMergeToThreeWayBranch,
   FeatureMacroFusion
 ]>;
@@ -1144,8 +1143,8 @@ def : Proc<"bdver4", [
   FeatureMacroFusion
 ]>;
 
-// Znver1
-def: ProcessorModel<"znver1", Znver1Model, [
+// AMD Zen Processors common ISAs
+def ZNFeatures : ProcessorFeatures<[], [
   FeatureADX,
   FeatureAES,
   FeatureAVX2,
@@ -1183,6 +1182,19 @@ def: ProcessorModel<"znver1", Znver1Model, [
   FeatureXSAVEC,
   FeatureXSAVEOPT,
   FeatureXSAVES]>;
+
+class Znver1Proc<string Name> : ProcModel<Name, Znver1Model,
+                                         ZNFeatures.Value, [
+]>;
+def : Znver1Proc<"znver1">;
+
+class Znver2Proc<string Name> : ProcModel<Name, Znver1Model,
+                                         ZNFeatures.Value, [
+  FeatureCLWB,
+  FeatureRDPID,
+  FeatureWBNOINVD
+]>;
+def : Znver2Proc<"znver2">;
 
 def : Proc<"geode",           [FeatureX87, FeatureSlowUAMem16, Feature3DNowA]>;
 

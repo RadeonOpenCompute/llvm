@@ -1071,10 +1071,11 @@ Currently, only the following parameter attributes are defined:
 
 ``align <n>``
     This indicates that the pointer value may be assumed by the optimizer to
-    have the specified alignment.
+    have the specified alignment.  If the pointer value does not have the
+    specified alignment, behavior is undefined.
 
     Note that this attribute has additional semantics when combined with the
-    ``byval`` attribute.
+    ``byval`` attribute, which are documented there.
 
 .. _noalias:
 
@@ -3293,14 +3294,14 @@ basic block in the specified function, and always has an ``i8*`` type.
 Taking the address of the entry block is illegal.
 
 This value only has defined behavior when used as an operand to the
-':ref:`indirectbr <i_indirectbr>`' instruction, or for comparisons
-against null. Pointer equality tests between labels addresses results in
-undefined behavior --- though, again, comparison against null is ok, and
-no label is equal to the null pointer. This may be passed around as an
+':ref:`indirectbr <i_indirectbr>`' or ':ref:`callbr <i_callbr>`'instruction, or
+for comparisons against null. Pointer equality tests between labels addresses
+results in undefined behavior --- though, again, comparison against null is ok,
+and no label is equal to the null pointer. This may be passed around as an
 opaque pointer sized value as long as the bits are not inspected. This
 allows ``ptrtoint`` and arithmetic to be performed on these values so
-long as the original value is reconstituted before the ``indirectbr``
-instruction.
+long as the original value is reconstituted before the ``indirectbr`` or
+``callbr`` instruction.
 
 Finally, some targets may provide defined semantics when using the value
 as the operand to an inline assembly, but that is target specific.
@@ -8364,15 +8365,16 @@ boundary compatible with the type.
 Semantics:
 """"""""""
 
-Memory is allocated; a pointer is returned. The operation is undefined
-if there is insufficient stack space for the allocation. '``alloca``'d
-memory is automatically released when the function returns. The
-'``alloca``' instruction is commonly used to represent automatic
-variables that must have an address available. When the function returns
-(either with the ``ret`` or ``resume`` instructions), the memory is
-reclaimed. Allocating zero bytes is legal, but the returned pointer may not
-be unique. The order in which memory is allocated (ie., which way the stack
-grows) is not specified.
+Memory is allocated; a pointer is returned. The allocated memory is
+uninitialized, and loading from uninitialized memory produces an undefined
+value. The operation itself is undefined if there is insufficient stack
+space for the allocation.'``alloca``'d memory is automatically released
+when the function returns. The '``alloca``' instruction is commonly used
+to represent automatic variables that must have an address available. When
+the function returns (either with the ``ret`` or ``resume`` instructions),
+the memory is reclaimed. Allocating zero bytes is legal, but the returned
+pointer may not be unique. The order in which memory is allocated (ie.,
+which way the stack grows) is not specified.
 
 Example:
 """"""""
@@ -11324,8 +11326,11 @@ Semantics:
 The '``llvm.memcpy.*``' intrinsics copy a block of memory from the
 source location to the destination location, which are not allowed to
 overlap. It copies "len" bytes of memory over. If the argument is known
-to be aligned to some boundary, this can be specified as the fourth
-argument, otherwise it should be set to 0 or 1 (both meaning no alignment).
+to be aligned to some boundary, this can be specified as an attribute on
+the argument.
+
+If "len" is 0, the pointers may be NULL or dangling. However, they must still
+be appropriately aligned.
 
 .. _int_memmove:
 
@@ -11379,8 +11384,11 @@ Semantics:
 The '``llvm.memmove.*``' intrinsics copy a block of memory from the
 source location to the destination location, which may overlap. It
 copies "len" bytes of memory over. If the argument is known to be
-aligned to some boundary, this can be specified as the fourth argument,
-otherwise it should be set to 0 or 1 (both meaning no alignment).
+aligned to some boundary, this can be specified as an attribute on
+the argument.
+
+If "len" is 0, the pointers may be NULL or dangling. However, they must still
+be appropriately aligned.
 
 .. _int_memset:
 
@@ -11430,7 +11438,12 @@ Semantics:
 """"""""""
 
 The '``llvm.memset.*``' intrinsics fill "len" bytes of memory starting
-at the destination location.
+at the destination location. If the argument is known to be
+aligned to some boundary, this can be specified as an attribute on
+the argument.
+
+If "len" is 0, the pointers may be NULL or dangling. However, they must still
+be appropriately aligned.
 
 '``llvm.sqrt.*``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -12640,13 +12653,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.sadd.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.sadd.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.sadd.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.sadd.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.sadd.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""
@@ -12690,13 +12704,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.uadd.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.uadd.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.uadd.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.uadd.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""
@@ -12739,13 +12754,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.ssub.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.ssub.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.ssub.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.ssub.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.ssub.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""
@@ -12789,13 +12805,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.usub.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.usub.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.usub.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.usub.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""
@@ -12839,13 +12856,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.smul.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.smul.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.smul.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.smul.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.smul.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""
@@ -12889,13 +12907,14 @@ Syntax:
 """""""
 
 This is an overloaded intrinsic. You can use ``llvm.umul.with.overflow``
-on any integer bit width.
+on any integer bit width or vectors of integers.
 
 ::
 
       declare {i16, i1} @llvm.umul.with.overflow.i16(i16 %a, i16 %b)
       declare {i32, i1} @llvm.umul.with.overflow.i32(i32 %a, i32 %b)
       declare {i64, i1} @llvm.umul.with.overflow.i64(i64 %a, i64 %b)
+      declare {<4 x i32>, <4 x i1>} @llvm.umul.with.overflow.v4i32(<4 x i32> %a, <4 x i32> %b)
 
 Overview:
 """""""""

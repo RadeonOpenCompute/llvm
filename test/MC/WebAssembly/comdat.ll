@@ -68,7 +68,7 @@ define linkonce_odr i32 @sharedFn() #1 comdat($sharedComdat) {
 ; CHECK-NEXT:  - Type:            DATA
 ; CHECK-NEXT:    Segments:
 ; CHECK-NEXT:      - SectionOffset:   6
-; CHECK-NEXT:        MemoryIndex:     0
+; CHECK-NEXT:        InitFlags:       0
 ; CHECK-NEXT:        Offset:
 ; CHECK-NEXT:          Opcode:          I32_CONST
 ; CHECK-NEXT:          Value:           0

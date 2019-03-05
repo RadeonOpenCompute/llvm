@@ -13,20 +13,20 @@ target triple = "wasm32-unknown-unknown"
 ; CHECK:        - Type:            DATA
 ; CHECK-NEXT:     Segments:        
 ; CHECK-NEXT:       - SectionOffset:   6
-; CHECK-NEXT:         MemoryIndex:     0
-; CHECK-NEXT:         Offset:          
+; CHECK-NEXT:         InitFlags:       0
+; CHECK-NEXT:         Offset:
 ; CHECK-NEXT:           Opcode:          I32_CONST
 ; CHECK-NEXT:           Value:           0
 ; CHECK-NEXT:         Content:         '08000000'
 ; CHECK-NEXT:       - SectionOffset:   15
-; CHECK-NEXT:         MemoryIndex:     0
-; CHECK-NEXT:         Offset:          
+; CHECK-NEXT:         InitFlags:       0
+; CHECK-NEXT:         Offset:
 ; CHECK-NEXT:           Opcode:          I32_CONST
 ; CHECK-NEXT:           Value:           8
 ; CHECK-NEXT:         Content:         '01000000030000000700000000000000'
 ; CHECK-NEXT:       - SectionOffset:   36
-; CHECK-NEXT:         MemoryIndex:     0
-; CHECK-NEXT:         Offset:          
+; CHECK-NEXT:         InitFlags:       0
+; CHECK-NEXT:         Offset:
 ; CHECK-NEXT:           Opcode:          I32_CONST
 ; CHECK-NEXT:           Value:           24
 ; CHECK-NEXT:         Content:         '08000000'

@@ -1163,8 +1163,8 @@ bool TargetLowering::SimplifyDemandedBits(
     if (SimplifyDemandedBits(Src, InDemandedBits, Known, TLO, Depth + 1))
       return true;
     assert(!Known.hasConflict() && "Bits known to be one AND zero?");
-    Known = Known.zext(BitWidth);
-    Known.Zero.setBitsFrom(InBits);
+    assert(Known.getBitWidth() == InBits && "Src width has changed?");
+    Known = Known.zext(BitWidth, true /* ExtendedBitsAreKnownZero */);
     break;
   }
   case ISD::SIGN_EXTEND: {
@@ -1217,7 +1217,7 @@ bool TargetLowering::SimplifyDemandedBits(
     if (SimplifyDemandedBits(Src, InDemandedBits, Known, TLO, Depth + 1))
       return true;
     assert(!Known.hasConflict() && "Bits known to be one AND zero?");
-    Known = Known.zext(BitWidth);
+    Known = Known.zext(BitWidth, false /* => any extend */);
     break;
   }
   case ISD::TRUNCATE: {
@@ -1312,7 +1312,7 @@ bool TargetLowering::SimplifyDemandedBits(
 
     Known = Known2;
     if (BitWidth > EltBitWidth)
-      Known = Known.zext(BitWidth);
+      Known = Known.zext(BitWidth, false /* => any extend */);
     break;
   }
   case ISD::BITCAST: {
@@ -1712,7 +1712,7 @@ bool TargetLowering::SimplifyDemandedVectorElts(
     SDValue Sub = Op.getOperand(1);
     EVT SubVT = Sub.getValueType();
     unsigned NumSubElts = SubVT.getVectorNumElements();
-    const APInt &Idx = cast<ConstantSDNode>(Op.getOperand(2))->getAPIntValue();
+    const APInt &Idx = Op.getConstantOperandAPInt(2);
     if (Idx.ugt(NumElts - NumSubElts))
       break;
     unsigned SubIdx = Idx.getZExtValue();
@@ -2379,8 +2379,7 @@ SDValue TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
     if (N0.getOpcode() == ISD::SRL && (C1.isNullValue() || C1.isOneValue()) &&
         N0.getOperand(0).getOpcode() == ISD::CTLZ &&
         N0.getOperand(1).getOpcode() == ISD::Constant) {
-      const APInt &ShAmt
-        = cast<ConstantSDNode>(N0.getOperand(1))->getAPIntValue();
+      const APInt &ShAmt = N0.getConstantOperandAPInt(1);
       if ((Cond == ISD::SETEQ || Cond == ISD::SETNE) &&
           ShAmt == Log2_32(N0.getValueSizeInBits())) {
         if ((C1 == 0) == (Cond == ISD::SETEQ)) {
@@ -2531,8 +2530,7 @@ SDValue TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
         // 8 bits, but have to be careful...
         if (Lod->getExtensionType() != ISD::NON_EXTLOAD)
           origWidth = Lod->getMemoryVT().getSizeInBits();
-        const APInt &Mask =
-          cast<ConstantSDNode>(N0.getOperand(1))->getAPIntValue();
+        const APInt &Mask = N0.getConstantOperandAPInt(1);
         for (unsigned width = origWidth / 2; width>=8; width /= 2) {
           APInt newMask = APInt::getLowBitsSet(maskWidth, width);
           for (unsigned offset=0; offset<origWidth/width; offset++) {
@@ -5522,11 +5520,15 @@ TargetLowering::expandFixedPointMul(SDNode *Node, SelectionDAG &DAG) const {
                      DAG.getConstant(Scale, dl, ShiftTy));
 }
 
-std::pair<SDValue, SDValue> TargetLowering::expandMULO(
-    SDNode *Node, SelectionDAG &DAG) const {
+bool TargetLowering::expandMULO(SDNode *Node, SDValue &Result,
+                                SDValue &Overflow, SelectionDAG &DAG) const {
   SDLoc dl(Node);
   EVT VT = Node->getValueType(0);
-  EVT WideVT = EVT::getIntegerVT(*DAG.getContext(), VT.getSizeInBits() * 2);
+  EVT WideVT = EVT::getIntegerVT(*DAG.getContext(), VT.getScalarSizeInBits() * 2);
+  if (VT.isVector())
+    WideVT = EVT::getVectorVT(*DAG.getContext(), WideVT,
+                              VT.getVectorNumElements());
+
   SDValue LHS = Node->getOperand(0);
   SDValue RHS = Node->getOperand(1);
   SDValue BottomHalf;
@@ -5546,11 +5548,15 @@ std::pair<SDValue, SDValue> TargetLowering::expandMULO(
     LHS = DAG.getNode(Ops[isSigned][2], dl, WideVT, LHS);
     RHS = DAG.getNode(Ops[isSigned][2], dl, WideVT, RHS);
     SDValue Mul = DAG.getNode(ISD::MUL, dl, WideVT, LHS, RHS);
-    BottomHalf = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, VT, Mul,
-                             DAG.getIntPtrConstant(0, dl));
-    TopHalf = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, VT, Mul,
-                          DAG.getIntPtrConstant(1, dl));
+    BottomHalf = DAG.getNode(ISD::TRUNCATE, dl, VT, Mul);
+    SDValue ShiftAmt = DAG.getConstant(VT.getScalarSizeInBits(), dl,
+        getShiftAmountTy(WideVT, DAG.getDataLayout()));
+    TopHalf = DAG.getNode(ISD::TRUNCATE, dl, VT,
+                          DAG.getNode(ISD::SRL, dl, WideVT, Mul, ShiftAmt));
   } else {
+    if (VT.isVector())
+      return false;
+
     // We can fall back to a libcall with an illegal type for the MUL if we
     // have a libcall big enough.
     // Also, we can fall back to a division in some cases, but that's a big
@@ -5618,24 +5624,24 @@ std::pair<SDValue, SDValue> TargetLowering::expandMULO(
   }
 
   EVT SetCCVT = getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+  Result = BottomHalf;
   if (isSigned) {
     SDValue ShiftAmt = DAG.getConstant(
-        VT.getSizeInBits() - 1, dl,
+        VT.getScalarSizeInBits() - 1, dl,
         getShiftAmountTy(BottomHalf.getValueType(), DAG.getDataLayout()));
     SDValue Sign = DAG.getNode(ISD::SRA, dl, VT, BottomHalf, ShiftAmt);
-    TopHalf = DAG.getSetCC(dl, SetCCVT, TopHalf, Sign, ISD::SETNE);
+    Overflow = DAG.getSetCC(dl, SetCCVT, TopHalf, Sign, ISD::SETNE);
   } else {
-    TopHalf = DAG.getSetCC(dl, SetCCVT, TopHalf,
-                           DAG.getConstant(0, dl, VT), ISD::SETNE);
+    Overflow = DAG.getSetCC(dl, SetCCVT, TopHalf,
+                            DAG.getConstant(0, dl, VT), ISD::SETNE);
   }
 
   // Truncate the result if SetCC returns a larger type than needed.
   EVT RType = Node->getValueType(1);
-  if (RType.getSizeInBits() < TopHalf.getValueSizeInBits())
-    TopHalf = DAG.getNode(ISD::TRUNCATE, dl, RType, TopHalf);
+  if (RType.getSizeInBits() < Overflow.getValueSizeInBits())
+    Overflow = DAG.getNode(ISD::TRUNCATE, dl, RType, Overflow);
 
-  assert(RType.getSizeInBits() == TopHalf.getValueSizeInBits() &&
+  assert(RType.getSizeInBits() == Overflow.getValueSizeInBits() &&
          "Unexpected result type for S/UMULO legalization");
-
-  return std::make_pair(BottomHalf, TopHalf);
+  return true;
 }

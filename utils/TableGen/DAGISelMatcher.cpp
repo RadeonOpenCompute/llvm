@@ -211,6 +211,11 @@ void CheckCondCodeMatcher::printImpl(raw_ostream &OS, unsigned indent) const {
   OS.indent(indent) << "CheckCondCode ISD::" << CondCodeName << '\n';
 }
 
+void CheckChild2CondCodeMatcher::printImpl(raw_ostream &OS,
+                                           unsigned indent) const {
+  OS.indent(indent) << "CheckChild2CondCode ISD::" << CondCodeName << '\n';
+}
+
 void CheckValueTypeMatcher::printImpl(raw_ostream &OS, unsigned indent) const {
   OS.indent(indent) << "CheckValueType MVT::" << TypeName << '\n';
 }
@@ -230,6 +235,16 @@ void CheckOrImmMatcher::printImpl(raw_ostream &OS, unsigned indent) const {
 void CheckFoldableChainNodeMatcher::printImpl(raw_ostream &OS,
                                               unsigned indent) const {
   OS.indent(indent) << "CheckFoldableChainNode\n";
+}
+
+void CheckImmAllOnesVMatcher::printImpl(raw_ostream &OS,
+                                        unsigned indent) const {
+  OS.indent(indent) << "CheckAllOnesV\n";
+}
+
+void CheckImmAllZerosVMatcher::printImpl(raw_ostream &OS,
+                                         unsigned indent) const {
+  OS.indent(indent) << "CheckAllZerosV\n";
 }
 
 void EmitIntegerMatcher::printImpl(raw_ostream &OS, unsigned indent) const {

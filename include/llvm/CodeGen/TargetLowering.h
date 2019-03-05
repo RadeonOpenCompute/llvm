@@ -2439,6 +2439,23 @@ public:
     return false;
   }
 
+  /// Try to convert math with an overflow comparison into the corresponding DAG
+  /// node operation. Targets may want to override this independently of whether
+  /// the operation is legal/custom for the given type because it may obscure
+  /// matching of other patterns.
+  virtual bool shouldFormOverflowOp(unsigned Opcode, EVT VT) const {
+    // TODO: The default logic is inherited from code in CodeGenPrepare.
+    // The opcode should not make a difference by default?
+    if (Opcode != ISD::UADDO)
+      return false;
+
+    // Allow the transform as long as we have an integer type that is not
+    // obviously illegal and unsupported.
+    if (VT.isVector())
+      return false;
+    return VT.isSimple() || !isOperationExpand(Opcode, VT);
+  }
+
   // Return true if it is profitable to use a scalar input to a BUILD_VECTOR
   // even if the vector itself has multiple uses.
   virtual bool aggressivelyPreferBuildVectorSources(EVT VecVT) const {
@@ -3871,9 +3888,10 @@ public:
   /// integers as its arguments.
   SDValue expandFixedPointMul(SDNode *Node, SelectionDAG &DAG) const;
 
-  /// Method for building the DAG expansion of ISD::[US]MULO, returning the two
-  /// result values as a pair.
-  std::pair<SDValue, SDValue> expandMULO(SDNode *Node, SelectionDAG &DAG) const;
+  /// Method for building the DAG expansion of ISD::[US]MULO. Returns whether
+  /// expansion was successful and populates the Result and Overflow arguments.
+  bool expandMULO(SDNode *Node, SDValue &Result, SDValue &Overflow,
+                  SelectionDAG &DAG) const;
 
   //===--------------------------------------------------------------------===//
   // Instruction Emitting Hooks

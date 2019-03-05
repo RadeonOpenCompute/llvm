@@ -39,6 +39,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
@@ -329,15 +330,6 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     break;
   }
   }
-}
-
-const MCExpr *WebAssemblyAsmPrinter::lowerConstant(const Constant *CV) {
-  if (const auto *GV = dyn_cast<GlobalValue>(CV))
-    if (GV->getValueType()->isFunctionTy()) {
-      return MCSymbolRefExpr::create(
-          getSymbol(GV), MCSymbolRefExpr::VK_WebAssembly_FUNCTION, OutContext);
-    }
-  return AsmPrinter::lowerConstant(CV);
 }
 
 bool WebAssemblyAsmPrinter::PrintAsmOperand(const MachineInstr *MI,

@@ -122,29 +122,24 @@ std::string SubtargetFeatures::getString() const {
 
 /// For each feature that is (transitively) implied by this feature, set it.
 static
-void SetImpliedBits(FeatureBitset &Bits, const SubtargetFeatureKV &FeatureEntry,
+void SetImpliedBits(FeatureBitset &Bits, const FeatureBitset &Implies,
                     ArrayRef<SubtargetFeatureKV> FeatureTable) {
-  for (const SubtargetFeatureKV &FE : FeatureTable) {
-    if (FeatureEntry.Value == FE.Value) continue;
-
-    if ((FeatureEntry.Implies & FE.Value).any()) {
-      Bits |= FE.Value;
-      SetImpliedBits(Bits, FE, FeatureTable);
-    }
-  }
+  // OR the Implies bits in outside the loop. This allows the Implies for CPUs
+  // which might imply features not in FeatureTable to use this.
+  Bits |= Implies;
+  for (const SubtargetFeatureKV &FE : FeatureTable)
+    if (Implies.test(FE.Value))
+      SetImpliedBits(Bits, FE.Implies.getAsBitset(), FeatureTable);
 }
 
 /// For each feature that (transitively) implies this feature, clear it.
 static
-void ClearImpliedBits(FeatureBitset &Bits,
-                      const SubtargetFeatureKV &FeatureEntry,
+void ClearImpliedBits(FeatureBitset &Bits, unsigned Value,
                       ArrayRef<SubtargetFeatureKV> FeatureTable) {
   for (const SubtargetFeatureKV &FE : FeatureTable) {
-    if (FeatureEntry.Value == FE.Value) continue;
-
-    if ((FE.Implies & FeatureEntry.Value).any()) {
-      Bits &= ~FE.Value;
-      ClearImpliedBits(Bits, FE, FeatureTable);
+    if (FE.Implies.getAsBitset().test(Value)) {
+      Bits.reset(FE.Value);
+      ClearImpliedBits(Bits, FE.Value, FeatureTable);
     }
   }
 }
@@ -157,15 +152,15 @@ SubtargetFeatures::ToggleFeature(FeatureBitset &Bits, StringRef Feature,
       Find(StripFlag(Feature), FeatureTable);
   // If there is a match
   if (FeatureEntry) {
-    if ((Bits & FeatureEntry->Value) == FeatureEntry->Value) {
-      Bits &= ~FeatureEntry->Value;
+    if (Bits.test(FeatureEntry->Value)) {
+      Bits.reset(FeatureEntry->Value);
       // For each feature that implies this, clear it.
-      ClearImpliedBits(Bits, *FeatureEntry, FeatureTable);
+      ClearImpliedBits(Bits, FeatureEntry->Value, FeatureTable);
     } else {
-      Bits |=  FeatureEntry->Value;
+      Bits.set(FeatureEntry->Value);
 
       // For each feature that this implies, set it.
-      SetImpliedBits(Bits, *FeatureEntry, FeatureTable);
+      SetImpliedBits(Bits, FeatureEntry->Implies.getAsBitset(), FeatureTable);
     }
   } else {
     errs() << "'" << Feature << "' is not a recognized feature for this target"
@@ -184,15 +179,15 @@ void SubtargetFeatures::ApplyFeatureFlag(FeatureBitset &Bits, StringRef Feature,
   if (FeatureEntry) {
     // Enable/disable feature in bits
     if (isEnabled(Feature)) {
-      Bits |= FeatureEntry->Value;
+      Bits.set(FeatureEntry->Value);
 
       // For each feature that this implies, set it.
-      SetImpliedBits(Bits, *FeatureEntry, FeatureTable);
+      SetImpliedBits(Bits, FeatureEntry->Implies.getAsBitset(), FeatureTable);
     } else {
-      Bits &= ~FeatureEntry->Value;
+      Bits.reset(FeatureEntry->Value);
 
       // For each feature that implies this, clear it.
-      ClearImpliedBits(Bits, *FeatureEntry, FeatureTable);
+      ClearImpliedBits(Bits, FeatureEntry->Value, FeatureTable);
     }
   } else {
     errs() << "'" << Feature << "' is not a recognized feature for this target"
@@ -224,14 +219,8 @@ SubtargetFeatures::getFeatureBits(StringRef CPU,
 
     // If there is a match
     if (CPUEntry) {
-      // Set base feature bits
-      Bits = CPUEntry->Value;
-
-      // Set the feature implied by this CPU feature, if any.
-      for (auto &FE : FeatureTable) {
-        if ((CPUEntry->Value & FE.Value).any())
-          SetImpliedBits(Bits, FE, FeatureTable);
-      }
+      // Set the features implied by this CPU feature, if any.
+      SetImpliedBits(Bits, CPUEntry->Implies.getAsBitset(), FeatureTable);
     } else {
       errs() << "'" << CPU << "' is not a recognized processor for this target"
              << " (ignoring processor)\n";
@@ -243,8 +232,8 @@ SubtargetFeatures::getFeatureBits(StringRef CPU,
     // Check for help
     if (Feature == "+help")
       Help(CPUTable, FeatureTable);
-
-    ApplyFeatureFlag(Bits, Feature, FeatureTable);
+    else
+      ApplyFeatureFlag(Bits, Feature, FeatureTable);
   }
 
   return Bits;
