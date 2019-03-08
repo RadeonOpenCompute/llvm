@@ -33,6 +33,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/RemarkStreamer.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
@@ -563,8 +564,8 @@ int main(int argc, char **argv) {
       errs() << EC.message() << '\n';
       return 1;
     }
-    Context.setDiagnosticsOutputFile(
-        llvm::make_unique<yaml::Output>(OptRemarkFile->os()));
+    Context.setRemarkStreamer(llvm::make_unique<RemarkStreamer>(
+        RemarksFilename, OptRemarkFile->os()));
   }
 
   // Load the input module...
@@ -639,6 +640,11 @@ int main(int argc, char **argv) {
     CPUStr = getCPUStr();
     FeaturesStr = getFeaturesStr();
     Machine = GetTargetMachine(ModuleTriple, CPUStr, FeaturesStr, Options);
+  } else if (ModuleTriple.getArchName() != "unknown" &&
+             ModuleTriple.getArchName() != "") {
+    errs() << argv[0] << ": unrecognized architecture '"
+           << ModuleTriple.getArchName() << "' provided.\n";
+    return 1;
   }
 
   std::unique_ptr<TargetMachine> TM(Machine);
