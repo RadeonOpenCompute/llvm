@@ -108,6 +108,19 @@ class SelectAcceleratorCode : public ModulePass {
             [&]() { return M.alias_end(); },
             [](const Constant& K) { return !K.isConstantUsed(); });
     }
+
+    static
+    bool alwaysInline_(Function &F)
+    {
+        if (F.hasFnAttribute(Attribute::AlwaysInline)) return true;
+
+        if (F.hasFnAttribute(Attribute::NoInline)) {
+            F.removeFnAttr(Attribute::NoInline);
+        }
+        F.addFnAttr(Attribute::AlwaysInline);
+
+        return false;
+    }
 public:
     static char ID;
     SelectAcceleratorCode() : ModulePass{ID} {}
