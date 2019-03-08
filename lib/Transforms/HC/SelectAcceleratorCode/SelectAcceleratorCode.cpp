@@ -30,10 +30,6 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableFunctionCalls(
-     "sac-enable-function-calls", cl::init(false), cl::Hidden,
-     cl::desc("Enable function calls"));
-
 namespace {
 class SelectAcceleratorCode : public ModulePass {
     SmallPtrSet<const Function*, 8u> HCCallees_;
@@ -108,19 +104,6 @@ class SelectAcceleratorCode : public ModulePass {
             [&]() { return M.alias_end(); },
             [](const Constant& K) { return !K.isConstantUsed(); });
     }
-
-    static
-    bool alwaysInline_(Function &F)
-    {
-        if (F.hasFnAttribute(Attribute::AlwaysInline)) return true;
-
-        if (F.hasFnAttribute(Attribute::NoInline)) {
-            F.removeFnAttr(Attribute::NoInline);
-        }
-        F.addFnAttr(Attribute::AlwaysInline);
-
-        return false;
-    }
 public:
     static char ID;
     SelectAcceleratorCode() : ModulePass{ID} {}
@@ -145,26 +128,7 @@ public:
 
         Modified = eraseDeadAliases_(M) || Modified;
 
-        if (!EnableFunctionCalls)
-            for (auto&& F : M.functions()) Modified = !alwaysInline_(F) || Modified;
-
         return Modified;
-    }
-
-    bool doFinalization(Module& M) override
-    {
-        if (EnableFunctionCalls) return false;
-
-        const auto It = std::find_if(M.begin(), M.end(), [](Function& F) {
-            return !isInlineViable(F) && !F.isIntrinsic();
-        });
-
-        if (It != M.end()) {
-            M.getContext().diagnose(DiagnosticInfoUnsupported{
-                *It, "The function cannot be inlined."});
-        }
-
-        return false;
     }
 };
 char SelectAcceleratorCode::ID = 0;
