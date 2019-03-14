@@ -1114,16 +1114,6 @@ static const EnumEntry<unsigned> ElfSymbolVisibilities[] = {
     {"HIDDEN",    "HIDDEN",    ELF::STV_HIDDEN},
     {"PROTECTED", "PROTECTED", ELF::STV_PROTECTED}};
 
-static const EnumEntry<unsigned> ElfSymbolTypes[] = {
-    {"None",      "NOTYPE",  ELF::STT_NOTYPE},
-    {"Object",    "OBJECT",  ELF::STT_OBJECT},
-    {"Function",  "FUNC",    ELF::STT_FUNC},
-    {"Section",   "SECTION", ELF::STT_SECTION},
-    {"File",      "FILE",    ELF::STT_FILE},
-    {"Common",    "COMMON",  ELF::STT_COMMON},
-    {"TLS",       "TLS",     ELF::STT_TLS},
-    {"GNU_IFunc", "IFUNC",   ELF::STT_GNU_IFUNC}};
-
 static const EnumEntry<unsigned> AMDGPUSymbolTypes[] = {
   { "AMDGPU_HSA_KERNEL",            ELF::STT_AMDGPU_HSA_KERNEL }
 };
@@ -2716,7 +2706,8 @@ void GNUStyle<ELFT>::printRelocation(const ELFO *Obj, const Elf_Shdr *SymTab,
     TargetName = unwrapOrError(Obj->getSectionName(Sec));
   } else if (Sym) {
     StringRef StrTable = unwrapOrError(Obj->getStringTableForSymtab(*SymTab));
-    TargetName = maybeDemangle(unwrapOrError(Sym->getName(StrTable)));
+    TargetName = this->dumper()->getFullSymbolName(
+        Sym, StrTable, SymTab->sh_type == SHT_DYNSYM /* IsDynamic */);
   }
 
   unsigned Width = ELFT::Is64Bits ? 16 : 8;
@@ -2730,15 +2721,18 @@ void GNUStyle<ELFT>::printRelocation(const ELFO *Obj, const Elf_Shdr *SymTab,
     printField(F);
 
   std::string Addend;
-  if (Sym && IsRela) {
-    if (R.r_addend < 0)
-      Addend = " - ";
-    else
-      Addend = " + ";
-  }
+  if (IsRela) {
+    int64_t RelAddend = R.r_addend;
+    if (Sym) {
+      if (R.r_addend < 0) {
+        Addend = " - ";
+        RelAddend = std::abs(RelAddend);
+      } else
+        Addend = " + ";
+    }
 
-  if (IsRela)
-    Addend += to_hexString(std::abs(R.r_addend), false);
+    Addend += to_hexString(RelAddend, false);
+  }
   OS << Addend << "\n";
 }
 
@@ -3388,17 +3382,18 @@ void GNUStyle<ELFT>::printDynamicRelocation(const ELFO *Obj, Elf_Rela R,
   for (auto &Field : Fields)
     printField(Field);
 
-  int64_t RelAddend = R.r_addend;
   std::string Addend;
-  if (!SymbolName.empty() && IsRela) {
-    if (R.r_addend < 0)
-      Addend = " - ";
-    else
-      Addend = " + ";
+  if (IsRela) {
+    int64_t RelAddend = R.r_addend;
+    if (!SymbolName.empty()) {
+      if (R.r_addend < 0) {
+        Addend = " - ";
+        RelAddend = std::abs(RelAddend);
+      } else
+        Addend = " + ";
+    }
+    Addend += to_string(format_hex_no_prefix(RelAddend, 1));
   }
-
-  if (IsRela)
-    Addend += to_string(format_hex_no_prefix(std::abs(RelAddend), 1));
   OS << Addend << "\n";
 }
 
@@ -3922,28 +3917,23 @@ static AMDGPUNote getAMDGPUNote(uint32_t NoteType, ArrayRef<uint8_t> Desc) {
   switch (NoteType) {
   default:
     return {"", ""};
-  case ELF::NT_AMDGPU_METADATA:
+  case ELF::NT_AMDGPU_METADATA: {
     auto MsgPackString =
         StringRef(reinterpret_cast<const char *>(Desc.data()), Desc.size());
-    msgpack::Reader MsgPackReader(MsgPackString);
-    auto OptMsgPackNodeOrErr = msgpack::Node::read(MsgPackReader);
-    if (errorToBool(OptMsgPackNodeOrErr.takeError()))
+    msgpack::Document MsgPackDoc;
+    if (!MsgPackDoc.readFromBlob(MsgPackString, /*Multi=*/false))
       return {"AMDGPU Metadata", "Invalid AMDGPU Metadata"};
-    auto &OptMsgPackNode = *OptMsgPackNodeOrErr;
-    if (!OptMsgPackNode)
-      return {"AMDGPU Metadata", "Invalid AMDGPU Metadata"};
-    auto &MsgPackNode = *OptMsgPackNode;
 
     AMDGPU::HSAMD::V3::MetadataVerifier Verifier(true);
-    if (!Verifier.verify(*MsgPackNode))
+    if (!Verifier.verify(MsgPackDoc.getRoot()))
       return {"AMDGPU Metadata", "Invalid AMDGPU Metadata"};
 
     std::string HSAMetadataString;
     raw_string_ostream StrOS(HSAMetadataString);
-    yaml::Output YOut(StrOS);
-    YOut << MsgPackNode;
+    MsgPackDoc.toYAML(StrOS);
 
     return {"AMDGPU Metadata", StrOS.str()};
+  }
   }
 }
 
@@ -4299,7 +4289,8 @@ void LLVMStyle<ELFT>::printRelocation(const ELFO *Obj, Elf_Rela Rel,
     TargetName = unwrapOrError(Obj->getSectionName(Sec));
   } else if (Sym) {
     StringRef StrTable = unwrapOrError(Obj->getStringTableForSymtab(*SymTab));
-    TargetName = maybeDemangle(unwrapOrError(Sym->getName(StrTable)));
+    TargetName = this->dumper()->getFullSymbolName(
+        Sym, StrTable, SymTab->sh_type == SHT_DYNSYM /* IsDynamic */);
   }
 
   if (opts::ExpandRelocs) {
