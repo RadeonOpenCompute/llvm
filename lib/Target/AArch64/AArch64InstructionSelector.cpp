@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelectorImpl.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -142,6 +143,21 @@ private:
   // Materialize a GlobalValue or BlockAddress using a movz+movk sequence.
   void materializeLargeCMVal(MachineInstr &I, const Value *V,
                              unsigned char OpFlags) const;
+
+  // Optimization methods.
+
+  // Helper function to check if a reg def is an MI with a given opcode and
+  // returns it if so.
+  MachineInstr *findMIFromReg(unsigned Reg, unsigned Opc,
+                              MachineIRBuilder &MIB) const {
+    auto *Def = MIB.getMRI()->getVRegDef(Reg);
+    if (!Def || Def->getOpcode() != Opc)
+      return nullptr;
+    return Def;
+  }
+
+  bool tryOptVectorShuffle(MachineInstr &I) const;
+  bool tryOptVectorDup(MachineInstr &MI) const;
 
   const AArch64TargetMachine &TM;
   const AArch64Subtarget &STI;
@@ -478,7 +494,8 @@ static bool selectSubregisterCopy(MachineInstr &I, MachineRegisterInfo &MRI,
                                   unsigned SubReg) {
   MachineIRBuilder MIB(I);
   auto Copy = MIB.buildCopy({From}, {SrcReg});
-  auto SubRegCopy = MIB.buildCopy({To}, {Copy}, SubReg);
+  auto SubRegCopy = MIB.buildInstr(TargetOpcode::COPY, {To}, {})
+                        .addReg(Copy.getReg(0), 0, SubReg);
   MachineOperand &RegOp = I.getOperand(1);
   RegOp.setReg(SubRegCopy.getReg(0));
 
@@ -1104,7 +1121,8 @@ bool AArch64InstructionSelector::select(MachineInstr &I,
 
     unsigned DstReg = MRI.createGenericVirtualRegister(LLT::scalar(64));
     MIB.setInsertPt(MIB.getMBB(), std::next(I.getIterator()));
-    MIB.buildCopy({I.getOperand(0).getReg()}, {DstReg}, AArch64::sub_32);
+    MIB.buildInstr(TargetOpcode::COPY, {I.getOperand(0).getReg()}, {})
+        .addReg(DstReg, 0, AArch64::sub_32);
     RBI.constrainGenericRegister(I.getOperand(0).getReg(),
                                  AArch64::GPR32RegClass, MRI);
     I.getOperand(0).setReg(DstReg);
@@ -1938,7 +1956,8 @@ MachineInstr *AArch64InstructionSelector::emitExtractVectorElt(
     DstReg = MRI.createVirtualRegister(DstRC);
   // If the lane index is 0, we just use a subregister COPY.
   if (LaneIdx == 0) {
-    auto Copy = MIRBuilder.buildCopy({*DstReg}, {VecReg}, ExtractSubReg);
+    auto Copy = MIRBuilder.buildInstr(TargetOpcode::COPY, {*DstReg}, {})
+                    .addReg(VecReg, 0, ExtractSubReg);
     RBI.constrainGenericRegister(*DstReg, *DstRC, MRI);
     return &*Copy;
   }
@@ -2115,7 +2134,8 @@ bool AArch64InstructionSelector::selectUnmergeValues(
   //
   // Perform the first copy separately as a subregister copy.
   unsigned CopyTo = I.getOperand(0).getReg();
-  auto FirstCopy = MIB.buildCopy({CopyTo}, {InsertRegs[0]}, ExtractSubReg);
+  auto FirstCopy = MIB.buildInstr(TargetOpcode::COPY, {CopyTo}, {})
+                       .addReg(InsertRegs[0], 0, ExtractSubReg);
   constrainSelectedInstRegOperands(*FirstCopy, TII, TRI, RBI);
 
   // Now, perform the remaining copies as vector lane copies.
@@ -2321,8 +2341,97 @@ MachineInstr *AArch64InstructionSelector::emitVectorConcat(
   return &*InsElt;
 }
 
+bool AArch64InstructionSelector::tryOptVectorDup(MachineInstr &I) const {
+  // Try to match a vector splat operation into a dup instruction.
+  // We're looking for this pattern:
+  //    %scalar:gpr(s64) = COPY $x0
+  //    %undef:fpr(<2 x s64>) = G_IMPLICIT_DEF
+  //    %cst0:gpr(s32) = G_CONSTANT i32 0
+  //    %zerovec:fpr(<2 x s32>) = G_BUILD_VECTOR %cst0(s32), %cst0(s32)
+  //    %ins:fpr(<2 x s64>) = G_INSERT_VECTOR_ELT %undef, %scalar(s64), %cst0(s32)
+  //    %splat:fpr(<2 x s64>) = G_SHUFFLE_VECTOR %ins(<2 x s64>), %undef,
+  //                                             %zerovec(<2 x s32>)
+  //
+  // ...into:
+  // %splat = DUP %scalar
+  // We use the regbank of the scalar to determine which kind of dup to use.
+  MachineIRBuilder MIB(I);
+  MachineRegisterInfo &MRI = *MIB.getMRI();
+  const TargetRegisterInfo &TRI = *MRI.getTargetRegisterInfo();
+  using namespace TargetOpcode;
+  using namespace MIPatternMatch;
+
+  // Begin matching the insert.
+  auto *InsMI =
+      findMIFromReg(I.getOperand(1).getReg(), G_INSERT_VECTOR_ELT, MIB);
+  if (!InsMI)
+    return false;
+  // Match the undef vector operand.
+  auto *UndefMI =
+      findMIFromReg(InsMI->getOperand(1).getReg(), G_IMPLICIT_DEF, MIB);
+  if (!UndefMI)
+    return false;
+  // Match the scalar being splatted.
+  unsigned ScalarReg = InsMI->getOperand(2).getReg();
+  const RegisterBank *ScalarRB = RBI.getRegBank(ScalarReg, MRI, TRI);
+  // Match the index constant 0.
+  int64_t Index = 0;
+  if (!mi_match(InsMI->getOperand(3).getReg(), MRI, m_ICst(Index)) || Index)
+    return false;
+
+  // The shuffle's second operand doesn't matter if the mask is all zero.
+  auto *ZeroVec = findMIFromReg(I.getOperand(3).getReg(), G_BUILD_VECTOR, MIB);
+  if (!ZeroVec)
+    return false;
+  int64_t Zero = 0;
+  if (!mi_match(ZeroVec->getOperand(1).getReg(), MRI, m_ICst(Zero)) || Zero)
+    return false;
+  for (unsigned i = 1, e = ZeroVec->getNumOperands() - 1; i < e; ++i) {
+    if (ZeroVec->getOperand(i).getReg() != ZeroVec->getOperand(1).getReg())
+      return false; // This wasn't an all zeros vector.
+  }
+
+  // We're done, now find out what kind of splat we need.
+  LLT VecTy = MRI.getType(I.getOperand(0).getReg());
+  LLT EltTy = VecTy.getElementType();
+  if (VecTy.getSizeInBits() != 128 || EltTy.getSizeInBits() < 32) {
+    LLVM_DEBUG(dbgs() << "Could not optimize splat pattern < 128b yet");
+    return false;
+  }
+  bool IsFP = ScalarRB->getID() == AArch64::FPRRegBankID;
+  static const unsigned OpcTable[2][2] = {
+      {AArch64::DUPv4i32gpr, AArch64::DUPv2i64gpr},
+      {AArch64::DUPv4i32lane, AArch64::DUPv2i64lane}};
+  unsigned Opc = OpcTable[IsFP][EltTy.getSizeInBits() == 64];
+
+  // For FP splats, we need to widen the scalar reg via undef too.
+  if (IsFP) {
+    MachineInstr *Widen = emitScalarToVector(
+        EltTy.getSizeInBits(), &AArch64::FPR128RegClass, ScalarReg, MIB);
+    if (!Widen)
+      return false;
+    ScalarReg = Widen->getOperand(0).getReg();
+  }
+  auto Dup = MIB.buildInstr(Opc, {I.getOperand(0).getReg()}, {ScalarReg});
+  if (IsFP)
+    Dup.addImm(0);
+  constrainSelectedInstRegOperands(*Dup, TII, TRI, RBI);
+  I.eraseFromParent();
+  return true;
+}
+
+bool AArch64InstructionSelector::tryOptVectorShuffle(MachineInstr &I) const {
+  if (TM.getOptLevel() == CodeGenOpt::None)
+    return false;
+  if (tryOptVectorDup(I))
+    return true;
+  return false;
+}
+
 bool AArch64InstructionSelector::selectShuffleVector(
     MachineInstr &I, MachineRegisterInfo &MRI) const {
+  if (tryOptVectorShuffle(I))
+    return true;
   const LLT DstTy = MRI.getType(I.getOperand(0).getReg());
   unsigned Src1Reg = I.getOperand(1).getReg();
   const LLT Src1Ty = MRI.getType(Src1Reg);
@@ -2388,7 +2497,9 @@ bool AArch64InstructionSelector::selectShuffleVector(
     constrainSelectedInstRegOperands(*TBL1, TII, TRI, RBI);
 
     auto Copy =
-        MIRBuilder.buildCopy({I.getOperand(0).getReg()}, {TBL1}, AArch64::dsub);
+        MIRBuilder
+            .buildInstr(TargetOpcode::COPY, {I.getOperand(0).getReg()}, {})
+            .addReg(TBL1.getReg(0), 0, AArch64::dsub);
     RBI.constrainGenericRegister(Copy.getReg(0), AArch64::FPR64RegClass, MRI);
     I.eraseFromParent();
     return true;
@@ -2538,7 +2649,8 @@ bool AArch64InstructionSelector::selectBuildVector(
     unsigned Reg = MRI.createVirtualRegister(RC);
     unsigned DstReg = I.getOperand(0).getReg();
 
-    MIRBuilder.buildCopy({DstReg}, {DstVec}, SubReg);
+    MIRBuilder.buildInstr(TargetOpcode::COPY, {DstReg}, {})
+        .addReg(DstVec, 0, SubReg);
     MachineOperand &RegOp = I.getOperand(1);
     RegOp.setReg(Reg);
     RBI.constrainGenericRegister(DstReg, *RC, MRI);

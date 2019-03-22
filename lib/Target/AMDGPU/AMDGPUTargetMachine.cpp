@@ -298,10 +298,11 @@ static StringRef computeDataLayout(const Triple &TT) {
   }
 
   // 32-bit private, local, and region pointers. 64-bit global, constant and
-  // flat.
+  // flat, non-integral buffer fat pointers.
     return "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32"
          "-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
-         "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5";
+         "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5"
+         "-ni:7";
 }
 
 LLVM_READNONE
@@ -309,8 +310,9 @@ static StringRef getGPUOrDefault(const Triple &TT, StringRef GPU) {
   if (!GPU.empty())
     return GPU;
 
+  // Need to default to a target with flat support for HSA.
   if (TT.getArch() == Triple::amdgcn)
-    return "generic";
+    return TT.getOS() == Triple::AMDHSA ? "generic-hsa" : "generic";
 
   return "r600";
 }
@@ -585,8 +587,8 @@ public:
   bool addLegalizeMachineIR() override;
   bool addRegBankSelect() override;
   bool addGlobalInstructionSelect() override;
-  void addFastRegAlloc(FunctionPass *RegAllocPass) override;
-  void addOptimizedRegAlloc(FunctionPass *RegAllocPass) override;
+  void addFastRegAlloc() override;
+  void addOptimizedRegAlloc() override;
   void addPreRegAlloc() override;
   void addPostRegAlloc() override;
   void addPreSched2() override;
@@ -872,7 +874,7 @@ void GCNPassConfig::addPreRegAlloc() {
   addPass(createSIWholeQuadModePass());
 }
 
-void GCNPassConfig::addFastRegAlloc(FunctionPass *RegAllocPass) {
+void GCNPassConfig::addFastRegAlloc() {
   // FIXME: We have to disable the verifier here because of PHIElimination +
   // TwoAddressInstructions disabling it.
 
@@ -885,10 +887,10 @@ void GCNPassConfig::addFastRegAlloc(FunctionPass *RegAllocPass) {
   // machine-level CFG, but before register allocation.
   insertPass(&SILowerControlFlowID, &SIFixWWMLivenessID, false);
 
-  TargetPassConfig::addFastRegAlloc(RegAllocPass);
+  TargetPassConfig::addFastRegAlloc();
 }
 
-void GCNPassConfig::addOptimizedRegAlloc(FunctionPass *RegAllocPass) {
+void GCNPassConfig::addOptimizedRegAlloc() {
   insertPass(&MachineSchedulerID, &SIOptimizeExecMaskingPreRAID);
 
   insertPass(&SIOptimizeExecMaskingPreRAID, &SIFormMemoryClausesID);
@@ -902,7 +904,7 @@ void GCNPassConfig::addOptimizedRegAlloc(FunctionPass *RegAllocPass) {
   // machine-level CFG, but before register allocation.
   insertPass(&SILowerControlFlowID, &SIFixWWMLivenessID, false);
 
-  TargetPassConfig::addOptimizedRegAlloc(RegAllocPass);
+  TargetPassConfig::addOptimizedRegAlloc();
 }
 
 void GCNPassConfig::addPostRegAlloc() {

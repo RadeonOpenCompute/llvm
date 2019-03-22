@@ -1181,11 +1181,16 @@ static bool replaceMathCmpWithIntrinsic(BinaryOperator *BO, CmpInst *Cmp,
     if (!MathDominates && !DT.dominates(Cmp, BO))
       return false;
 
-    // Check that the insertion doesn't create a value that is live across more
-    // than two blocks, so to minimise the increase in register pressure.
-    if (BO->getParent() != Cmp->getParent()) {
-      BasicBlock *Dominator = MathDominates ? BO->getParent() : Cmp->getParent();
-      BasicBlock *Dominated = MathDominates ? Cmp->getParent() : BO->getParent();
+    BasicBlock *MathBB = BO->getParent(), *CmpBB = Cmp->getParent();
+    if (MathBB != CmpBB) {
+      // Avoid hoisting an extra op into a dominating block and creating a
+      // potentially longer critical path.
+      if (!MathDominates)
+        return false;
+      // Check that the insertion doesn't create a value that is live across
+      // more than two blocks, so to minimise the increase in register pressure.
+      BasicBlock *Dominator = MathDominates ? MathBB : CmpBB;
+      BasicBlock *Dominated = MathDominates ? CmpBB : MathBB;
       auto Successors = successors(Dominator);
       if (llvm::find(Successors, Dominated) == Successors.end())
         return false;
@@ -6876,6 +6881,7 @@ bool CodeGenPrepare::optimizeInst(Instruction *I, DominatorTree &DT,
   if (InsertedInsts.count(I))
     return false;
 
+  // TODO: Move into the switch on opcode below here.
   if (PHINode *P = dyn_cast<PHINode>(I)) {
     // It is possible for very late stage optimizations (such as SimplifyCFG)
     // to introduce PHI nodes too late to be cleaned up.  If we detect such a
@@ -6994,20 +7000,18 @@ bool CodeGenPrepare::optimizeInst(Instruction *I, DominatorTree &DT,
   if (tryToSinkFreeOperands(I))
     return true;
 
-  if (CallInst *CI = dyn_cast<CallInst>(I))
-    return optimizeCallInst(CI, ModifiedDT);
-
-  if (SelectInst *SI = dyn_cast<SelectInst>(I))
-    return optimizeSelectInst(SI, ModifiedDT);
-
-  if (ShuffleVectorInst *SVI = dyn_cast<ShuffleVectorInst>(I))
-    return optimizeShuffleVectorInst(SVI);
-
-  if (auto *Switch = dyn_cast<SwitchInst>(I))
-    return optimizeSwitchInst(Switch);
-
-  if (isa<ExtractElementInst>(I))
-    return optimizeExtractElementInst(I);
+  switch (I->getOpcode()) {
+  case Instruction::Call:
+    return optimizeCallInst(cast<CallInst>(I), ModifiedDT);
+  case Instruction::Select:
+    return optimizeSelectInst(cast<SelectInst>(I), ModifiedDT);
+  case Instruction::ShuffleVector:
+    return optimizeShuffleVectorInst(cast<ShuffleVectorInst>(I));
+  case Instruction::Switch:
+    return optimizeSwitchInst(cast<SwitchInst>(I));
+  case Instruction::ExtractElement:
+    return optimizeExtractElementInst(cast<ExtractElementInst>(I));
+  }
 
   return false;
 }
