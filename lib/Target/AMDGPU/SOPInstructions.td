@@ -130,6 +130,11 @@ class SOP1_1 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
   let has_sdst = 0;
 }
 
+// 64-bit input(a subset of SGPR_64) , no output
+class SOP1_64_2 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs), (ins CCR_SGPR_64:$src0), "$src0", pattern> {
+  let has_sdst = 0;
+}
 
 let isMoveImm = 1 in {
   let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
@@ -224,7 +229,7 @@ def S_SETPC_B64 : SOP1_1  <"s_setpc_b64">;
 
 let isReturn = 1 in {
 // Define variant marked as return rather than branch.
-def S_SETPC_B64_return : SOP1_1<"", [(AMDGPUret_flag i64:$src0)]>;
+def S_SETPC_B64_return : SOP1_64_2<"", [(AMDGPUret_flag i64:$src0)]>;
 }
 } // End isTerminator = 1, isBarrier = 1
 

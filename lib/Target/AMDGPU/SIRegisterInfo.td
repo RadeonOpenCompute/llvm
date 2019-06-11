@@ -464,6 +464,12 @@ def SGPR_64 : RegisterClass<"AMDGPU", [v2i32, i64, v2f32, f64, v4i16, v4f16], 32
   let AllocationPriority = 8;
 }
 
+// CCR (call clobbered registers) SGPR 64-bit registers
+def CCR_SGPR_64 : RegisterClass<"AMDGPU", [v2i32, i64, v2f32, f64, v4i16, v4f16], 32, (add (trunc SGPR_64, 16))> {
+  let CopyCost = 1;
+  let AllocationPriority = 8;
+}
+
 def TTMP_64 : RegisterClass<"AMDGPU", [v2i32, i64, f64, v4i16, v4f16], 32, (add TTMP_64Regs)> {
   let isAllocatable = 0;
 }

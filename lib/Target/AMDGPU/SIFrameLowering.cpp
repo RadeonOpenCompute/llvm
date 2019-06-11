@@ -683,6 +683,12 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
       LivePhysRegs LiveRegs(*ST.getRegisterInfo());
       LiveRegs.addLiveIns(MBB);
 
+      // to avoid clobbering the registers used in the return instruction.
+      if (MBBI->getOpcode() == AMDGPU::S_SETPC_B64_return &&
+          MBBI->getOperand(0).isReg()) {
+          LiveRegs.addReg(MBBI->getOperand(0).getReg());
+      }
+
       ScratchExecCopy
         = findScratchNonCalleeSaveRegister(MF, LiveRegs,
                                            *TRI.getWaveMaskRegClass());
