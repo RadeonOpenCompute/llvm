@@ -1,3 +1,5 @@
+.. _loop-terminology:
+
 ===========================================
 LLVM Loop Terminology (and Canonical Forms)
 ===========================================

@@ -296,8 +296,8 @@ define <4 x float> @sitofp_v2i32_v2f32(<1 x i64>*) nounwind {
 ; X86:       # %bb.0:
 ; X86-NEXT:    pushl %ebp
 ; X86-NEXT:    movl %esp, %ebp
-; X86-NEXT:    andl $-8, %esp
-; X86-NEXT:    subl $8, %esp
+; X86-NEXT:    andl $-16, %esp
+; X86-NEXT:    subl $32, %esp
 ; X86-NEXT:    movl 8(%ebp), %eax
 ; X86-NEXT:    movq (%eax), %mm0
 ; X86-NEXT:    paddd %mm0, %mm0
@@ -346,8 +346,7 @@ define <4 x float> @cvt_v2i32_v2f32(<1 x i64>*) nounwind {
 ; X64:       # %bb.0:
 ; X64-NEXT:    movq (%rdi), %mm0
 ; X64-NEXT:    paddd %mm0, %mm0
-; X64-NEXT:    movq %mm0, %rax
-; X64-NEXT:    movq %rax, %xmm0
+; X64-NEXT:    movq2dq %mm0, %xmm0
 ; X64-NEXT:    cvtdq2ps %xmm0, %xmm0
 ; X64-NEXT:    retq
   %2 = bitcast <1 x i64>* %0 to x86_mmx*

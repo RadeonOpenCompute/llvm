@@ -51,6 +51,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/InitLLVM.h"
@@ -344,10 +345,14 @@ typedef std::vector<std::tuple<uint64_t, StringRef, uint8_t>> SectionSymbolsTy;
 static bool shouldKeep(object::SectionRef S) {
   if (FilterSections.empty())
     return true;
-  StringRef SecName;
-  std::error_code error = S.getName(SecName);
-  if (error)
+
+  Expected<StringRef> SecNameOrErr = S.getName();
+  if (!SecNameOrErr) {
+    consumeError(SecNameOrErr.takeError());
     return false;
+  }
+  StringRef SecName = *SecNameOrErr;
+
   // StringSet does not allow empty key so avoid adding sections with
   // no name (such as the section with index 0) here.
   if (!SecName.empty())
@@ -381,12 +386,7 @@ LLVM_ATTRIBUTE_NORETURN void error(Twine Message) {
   exit(1);
 }
 
-void warn(StringRef Message) {
-  WithColor::warning(errs(), ToolName) << Message << ".\n";
-  errs().flush();
-}
-
-static void warn(Twine Message) {
+void warn(Twine Message) {
   // Output order between errs() and outs() matters especially for archive
   // files where the output is per member object.
   outs().flush();
@@ -548,17 +548,22 @@ protected:
   DILineInfo OldLineInfo;
   const ObjectFile *Obj = nullptr;
   std::unique_ptr<symbolize::LLVMSymbolizer> Symbolizer;
-  // File name to file contents of source
+  // File name to file contents of source.
   std::unordered_map<std::string, std::unique_ptr<MemoryBuffer>> SourceCache;
-  // Mark the line endings of the cached source
+  // Mark the line endings of the cached source.
   std::unordered_map<std::string, std::vector<StringRef>> LineCache;
+  // Keep track of missing sources.
+  StringSet<> MissingSources;
+  // Only emit 'no debug info' warning once.
+  bool WarnedNoDebugInfo;
 
 private:
   bool cacheSource(const DILineInfo& LineInfoFile);
 
 public:
   SourcePrinter() = default;
-  SourcePrinter(const ObjectFile *Obj, StringRef DefaultArch) : Obj(Obj) {
+  SourcePrinter(const ObjectFile *Obj, StringRef DefaultArch)
+      : Obj(Obj), WarnedNoDebugInfo(false) {
     symbolize::LLVMSymbolizer::Options SymbolizerOpts;
     SymbolizerOpts.PrintFunctions = DILineInfoSpecifier::FunctionNameKind::None;
     SymbolizerOpts.Demangle = false;
@@ -568,6 +573,7 @@ public:
   virtual ~SourcePrinter() = default;
   virtual void printSourceLine(raw_ostream &OS,
                                object::SectionedAddress Address,
+                               StringRef ObjectFilename,
                                StringRef Delimiter = "; ");
 };
 
@@ -577,8 +583,12 @@ bool SourcePrinter::cacheSource(const DILineInfo &LineInfo) {
     Buffer = MemoryBuffer::getMemBuffer(*LineInfo.Source);
   } else {
     auto BufferOrError = MemoryBuffer::getFile(LineInfo.FileName);
-    if (!BufferOrError)
+    if (!BufferOrError) {
+      if (MissingSources.insert(LineInfo.FileName).second)
+        warn("failed to find source " + LineInfo.FileName);
+
       return false;
+    }
     Buffer = std::move(*BufferOrError);
   }
   // Chomp the file to get lines
@@ -599,20 +609,33 @@ bool SourcePrinter::cacheSource(const DILineInfo &LineInfo) {
 
 void SourcePrinter::printSourceLine(raw_ostream &OS,
                                     object::SectionedAddress Address,
+                                    StringRef ObjectFilename,
                                     StringRef Delimiter) {
   if (!Symbolizer)
     return;
 
   DILineInfo LineInfo = DILineInfo();
   auto ExpectedLineInfo = Symbolizer->symbolizeCode(*Obj, Address);
+  std::string ErrorMessage;
   if (!ExpectedLineInfo)
-    consumeError(ExpectedLineInfo.takeError());
+    ErrorMessage = toString(ExpectedLineInfo.takeError());
   else
     LineInfo = *ExpectedLineInfo;
 
-  if ((LineInfo.FileName == "<invalid>") || LineInfo.Line == 0 ||
-      ((OldLineInfo.Line == LineInfo.Line) &&
-       (OldLineInfo.FileName == LineInfo.FileName)))
+  if (LineInfo.FileName == DILineInfo::BadString) {
+    if (!WarnedNoDebugInfo) {
+      std::string Warning =
+          "failed to parse debug information for " + ObjectFilename.str();
+      if (!ErrorMessage.empty())
+        Warning += ": " + ErrorMessage;
+      warn(Warning);
+      WarnedNoDebugInfo = true;
+    }
+    return;
+  }
+
+  if (LineInfo.Line == 0 || ((OldLineInfo.Line == LineInfo.Line) &&
+                             (OldLineInfo.FileName == LineInfo.FileName)))
     return;
 
   if (PrintLines)
@@ -623,8 +646,12 @@ void SourcePrinter::printSourceLine(raw_ostream &OS,
         return;
     auto LineBuffer = LineCache.find(LineInfo.FileName);
     if (LineBuffer != LineCache.end()) {
-      if (LineInfo.Line > LineBuffer->second.size())
+      if (LineInfo.Line > LineBuffer->second.size()) {
+        warn(formatv(
+            "debug info line number {0} exceeds the number of lines in {1}",
+            LineInfo.Line, LineInfo.FileName));
         return;
+      }
       // Vector begins at 0, line numbers are non-zero
       OS << Delimiter << LineBuffer->second[LineInfo.Line - 1] << '\n';
     }
@@ -663,10 +690,10 @@ public:
                          ArrayRef<uint8_t> Bytes,
                          object::SectionedAddress Address, raw_ostream &OS,
                          StringRef Annot, MCSubtargetInfo const &STI,
-                         SourcePrinter *SP,
+                         SourcePrinter *SP, StringRef ObjectFilename,
                          std::vector<RelocationRef> *Rels = nullptr) {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address);
+      SP->printSourceLine(OS, Address, ObjectFilename);
 
     size_t Start = OS.tell();
     if (!NoLeadingAddr)
@@ -707,9 +734,10 @@ public:
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
                  object::SectionedAddress Address, raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
+                 StringRef ObjectFilename,
                  std::vector<RelocationRef> *Rels) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address, "");
+      SP->printSourceLine(OS, Address, ObjectFilename, "");
     if (!MI) {
       printLead(Bytes, Address.Address, OS);
       OS << " <unknown>";
@@ -746,7 +774,7 @@ public:
       OS << Separator;
       Separator = "\n";
       if (SP && (PrintSource || PrintLines))
-        SP->printSourceLine(OS, Address, "");
+        SP->printSourceLine(OS, Address, ObjectFilename, "");
       printLead(Bytes, Address.Address, OS);
       OS << Preamble;
       Preamble = "   ";
@@ -776,9 +804,10 @@ public:
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
                  object::SectionedAddress Address, raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
+                 StringRef ObjectFilename,
                  std::vector<RelocationRef> *Rels) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address);
+      SP->printSourceLine(OS, Address, ObjectFilename);
 
     if (MI) {
       SmallString<40> InstStr;
@@ -827,9 +856,10 @@ public:
   void printInst(MCInstPrinter &IP, const MCInst *MI, ArrayRef<uint8_t> Bytes,
                  object::SectionedAddress Address, raw_ostream &OS,
                  StringRef Annot, MCSubtargetInfo const &STI, SourcePrinter *SP,
+                 StringRef ObjectFilename,
                  std::vector<RelocationRef> *Rels) override {
     if (SP && (PrintSource || PrintLines))
-      SP->printSourceLine(OS, Address);
+      SP->printSourceLine(OS, Address, ObjectFilename);
     if (!NoLeadingAddr)
       OS << format("%8" PRId64 ":", Address.Address / 8);
     if (!NoShowRawInsn) {
@@ -920,10 +950,12 @@ static void addPltEntries(const ObjectFile *Obj,
                           StringSaver &Saver) {
   Optional<SectionRef> Plt = None;
   for (const SectionRef &Section : Obj->sections()) {
-    StringRef Name;
-    if (Section.getName(Name))
+    Expected<StringRef> SecNameOrErr = Section.getName();
+    if (!SecNameOrErr) {
+      consumeError(SecNameOrErr.takeError());
       continue;
-    if (Name == ".plt")
+    }
+    if (*SecNameOrErr == ".plt")
       Plt = Section;
   }
   if (!Plt)
@@ -1206,9 +1238,8 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
       DataRefImpl DR = Section.getRawDataRefImpl();
       SegmentName = MachO->getSectionFinalSegmentName(DR);
     }
-    StringRef SectionName;
-    error(Section.getName(SectionName));
 
+    StringRef SectionName = unwrapOrError(Section.getName(), Obj->getFileName());
     // If the section has no symbol at the start, just insert a dummy one.
     if (Symbols.empty() || std::get<0>(Symbols[0]) != 0) {
       Symbols.insert(
@@ -1377,10 +1408,10 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
         if (Size == 0)
           Size = 1;
 
-        PIP.printInst(
-            *IP, Disassembled ? &Inst : nullptr, Bytes.slice(Index, Size),
-            {SectionAddr + Index + VMAAdjustment, Section.getIndex()}, outs(),
-            "", *STI, &SP, &Rels);
+        PIP.printInst(*IP, Disassembled ? &Inst : nullptr,
+                      Bytes.slice(Index, Size),
+                      {SectionAddr + Index + VMAAdjustment, Section.getIndex()},
+                      outs(), "", *STI, &SP, Obj->getFileName(), &Rels);
         outs() << CommentStream.str();
         Comments.clear();
 
@@ -1581,8 +1612,7 @@ void printRelocations(const ObjectFile *Obj) {
   }
 
   for (std::pair<SectionRef, std::vector<SectionRef>> &P : SecToRelSec) {
-    StringRef SecName;
-    error(P.first.getName(SecName));
+    StringRef SecName = unwrapOrError(P.first.getName(), Obj->getFileName());
     outs() << "RELOCATION RECORDS FOR [" << SecName << "]:\n";
 
     for (SectionRef Section : P.second) {
@@ -1654,8 +1684,7 @@ void printSectionHeaders(const ObjectFile *Obj) {
               "Idx Name          Size     VMA          Type\n";
 
   for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
-    StringRef Name;
-    error(Section.getName(Name));
+    StringRef Name = unwrapOrError(Section.getName(), Obj->getFileName());
     uint64_t VMA = Section.getAddress();
     if (shouldAdjustVA(Section))
       VMA += AdjustVMA;
@@ -1682,8 +1711,7 @@ void printSectionHeaders(const ObjectFile *Obj) {
 
 void printSectionContents(const ObjectFile *Obj) {
   for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
-    StringRef Name;
-    error(Section.getName(Name));
+    StringRef Name = unwrapOrError(Section.getName(), Obj->getFileName());
     uint64_t BaseAddr = Section.getAddress();
     uint64_t Size = Section.getSize();
     if (!Size)
@@ -1747,11 +1775,16 @@ void printSymbolTable(const ObjectFile *O, StringRef ArchiveName,
     section_iterator Section = unwrapOrError(Symbol.getSection(), ArchiveName,
                                              FileName, ArchitectureName);
     StringRef Name;
-    if (Type == SymbolRef::ST_Debug && Section != O->section_end())
-      Section->getName(Name);
-    else
+    if (Type == SymbolRef::ST_Debug && Section != O->section_end()) {
+      if (Expected<StringRef> NameOrErr = Section->getName())
+        Name = *NameOrErr;
+      else
+        consumeError(NameOrErr.takeError());
+
+    } else {
       Name = unwrapOrError(Symbol.getName(), ArchiveName, FileName,
                            ArchitectureName);
+    }
 
     bool Global = Flags & SymbolRef::SF_Global;
     bool Weak = Flags & SymbolRef::SF_Weak;
@@ -1797,8 +1830,8 @@ void printSymbolTable(const ObjectFile *O, StringRef ArchiveName,
         StringRef SegmentName = MachO->getSectionFinalSegmentName(DR);
         outs() << SegmentName << ",";
       }
-      StringRef SectionName;
-      error(Section->getName(SectionName));
+      StringRef SectionName =
+          unwrapOrError(Section->getName(), O->getFileName());
       outs() << SectionName;
     }
 
@@ -1871,7 +1904,11 @@ void printRawClangAST(const ObjectFile *Obj) {
   Optional<object::SectionRef> ClangASTSection;
   for (auto Sec : ToolSectionFilter(*Obj)) {
     StringRef Name;
-    Sec.getName(Name);
+    if (Expected<StringRef> NameOrErr = Sec.getName())
+      Name = *NameOrErr;
+    else
+      consumeError(NameOrErr.takeError());
+
     if (Name == ClangASTSectionName) {
       ClangASTSection = Sec;
       break;
@@ -1903,7 +1940,11 @@ static void printFaultMaps(const ObjectFile *Obj) {
 
   for (auto Sec : ToolSectionFilter(*Obj)) {
     StringRef Name;
-    Sec.getName(Name);
+    if (Expected<StringRef> NameOrErr = Sec.getName())
+      Name = *NameOrErr;
+    else
+      consumeError(NameOrErr.takeError());
+
     if (Name == FaultMapSectionName) {
       FaultMapSection = Sec;
       break;
