@@ -998,6 +998,15 @@ Value *LibCallSimplifier::optimizeMemCpy(CallInst *CI, IRBuilder<> &B,
   return CI->getArgOperand(0);
 }
 
+Value *LibCallSimplifier::optimizeMemPCpy(CallInst *CI, IRBuilder<> &B) {
+  Value *Dst = CI->getArgOperand(0);
+  Value *N = CI->getArgOperand(2);
+  // mempcpy(x, y, n) -> llvm.memcpy(align 1 x, align 1 y, n), x + n
+  CallInst *NewCI = B.CreateMemCpy(Dst, 1, CI->getArgOperand(1), 1, N);
+  NewCI->setAttributes(CI->getAttributes());
+  return B.CreateInBoundsGEP(B.getInt8Ty(), Dst, N);
+}
+
 Value *LibCallSimplifier::optimizeMemMove(CallInst *CI, IRBuilder<> &B, bool isIntrinsic) {
   Value *Size = CI->getArgOperand(2);
   if (ConstantInt *LenC = dyn_cast<ConstantInt>(Size))
@@ -1553,8 +1562,8 @@ Value *LibCallSimplifier::optimizePow(CallInst *Pow, IRBuilder<> &B) {
   if (match(Expo, m_SpecificFP(-1.0)))
     return B.CreateFDiv(ConstantFP::get(Ty, 1.0), Base, "reciprocal");
 
-  // pow(x, 0.0) -> 1.0
-  if (match(Expo, m_SpecificFP(0.0)))
+  // pow(x, +/-0.0) -> 1.0
+  if (match(Expo, m_AnyZeroFP()))
     return ConstantFP::get(Ty, 1.0);
 
   // pow(x, 1.0) -> x
@@ -2624,6 +2633,8 @@ Value *LibCallSimplifier::optimizeStringMemoryLibCall(CallInst *CI,
       return optimizeMemCmp(CI, Builder);
     case LibFunc_memcpy:
       return optimizeMemCpy(CI, Builder);
+    case LibFunc_mempcpy:
+      return optimizeMemPCpy(CI, Builder);
     case LibFunc_memmove:
       return optimizeMemMove(CI, Builder);
     case LibFunc_memset:
