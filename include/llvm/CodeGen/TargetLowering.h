@@ -923,6 +923,7 @@ public:
     case ISD::SMULFIX:
     case ISD::SMULFIXSAT:
     case ISD::UMULFIX:
+    case ISD::UMULFIXSAT:
       Supported = isSupportedFixedPointOperation(Op, VT, Scale);
       break;
     }
@@ -1577,23 +1578,19 @@ public:
   }
 
   /// Return the minimum stack alignment of an argument.
-  unsigned getMinStackArgumentAlignment() const {
-    return MinStackArgumentAlignment.value();
+  llvm::Align getMinStackArgumentAlignment() const {
+    return MinStackArgumentAlignment;
   }
 
   /// Return the minimum function alignment.
-  unsigned getMinFunctionLogAlignment() const {
-    return Log2(MinFunctionAlignment);
-  }
+  llvm::Align getMinFunctionAlignment() const { return MinFunctionAlignment; }
 
   /// Return the preferred function alignment.
-  unsigned getPrefFunctionLogAlignment() const {
-    return Log2(PrefFunctionAlignment);
-  }
+  llvm::Align getPrefFunctionAlignment() const { return PrefFunctionAlignment; }
 
   /// Return the preferred loop alignment.
-  virtual unsigned getPrefLoopLogAlignment(MachineLoop *ML = nullptr) const {
-    return Log2(PrefLoopAlignment);
+  virtual llvm::Align getPrefLoopAlignment(MachineLoop *ML = nullptr) const {
+    return PrefLoopAlignment;
   }
 
   /// Should loops be aligned even when the function is marked OptSize (but not
@@ -2121,8 +2118,8 @@ protected:
   void setPrefLoopAlignment(llvm::Align Align) { PrefLoopAlignment = Align; }
 
   /// Set the minimum stack alignment of an argument.
-  void setMinStackArgumentAlignment(unsigned Align) {
-    MinStackArgumentAlignment = llvm::Align(Align);
+  void setMinStackArgumentAlignment(llvm::Align Align) {
+    MinStackArgumentAlignment = Align;
   }
 
   /// Set the maximum atomic operation size supported by the
@@ -2958,6 +2955,14 @@ public:
     return false;
   }
 
+  /// Returns true if the specified base+offset is a legal indexed addressing
+  /// mode for this target. \p MI is the load or store instruction that is being
+  /// considered for transformation.
+  virtual bool isIndexingLegal(MachineInstr &MI, Register Base, Register Offset,
+                               bool IsPre, MachineRegisterInfo &MRI) const {
+    return false;
+  }
+
   /// Return the entry encoding for a jump table in the current function.  The
   /// returned value is a member of the MachineJumpTableInfo::JTEntryKind enum.
   virtual unsigned getJumpTableEncoding() const;
@@ -3707,6 +3712,25 @@ public:
     return MachineMemOperand::MONone;
   }
 
+  /// Should SelectionDAG lower an atomic store of the given kind as a normal
+  /// StoreSDNode (as opposed to an AtomicSDNode)?  NOTE: The intention is to
+  /// eventually migrate all targets to the using StoreSDNodes, but porting is
+  /// being done target at a time.  
+  virtual bool lowerAtomicStoreAsStoreSDNode(const StoreInst &SI) const {
+    assert(SI.isAtomic() && "violated precondition");
+    return false;
+  }
+
+  /// Should SelectionDAG lower an atomic load of the given kind as a normal
+  /// LoadSDNode (as opposed to an AtomicSDNode)?  NOTE: The intention is to
+  /// eventually migrate all targets to the using LoadSDNodes, but porting is
+  /// being done target at a time.  
+  virtual bool lowerAtomicLoadAsLoadSDNode(const LoadInst &LI) const {
+    assert(LI.isAtomic() && "violated precondition");
+    return false;
+  }
+
+
   /// This callback is invoked by the type legalizer to legalize nodes with an
   /// illegal operand type but legal result types.  It replaces the
   /// LowerOperation callback in the type Legalizer.  The reason we can not do
@@ -4097,8 +4121,8 @@ public:
   /// method accepts integers as its arguments.
   SDValue expandAddSubSat(SDNode *Node, SelectionDAG &DAG) const;
 
-  /// Method for building the DAG expansion of ISD::SMULFIX. This method accepts
-  /// integers as its arguments.
+  /// Method for building the DAG expansion of ISD::[U|S]MULFIX[SAT]. This
+  /// method accepts integers as its arguments.
   SDValue expandFixedPointMul(SDNode *Node, SelectionDAG &DAG) const;
 
   /// Method for building the DAG expansion of ISD::U(ADD|SUB)O. Expansion
